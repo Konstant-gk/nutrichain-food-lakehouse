@@ -1,0 +1,421 @@
+---
+description: Clean code for Python pipeline scripts and SQL — naming, structure, DRY, errors, comments (data engineering focus).
+globs: **/*.py, **/*.sql
+alwaysApply: false
+---
+
+# Clean Code — Python & SQL
+
+## Overview
+
+| Principle | Description |
+|-----------|-------------|
+| Readability | Code is read more than written |
+| Simplicity | Prefer clear steps over clever one-liners |
+| Consistency | Same patterns for ingest, transform, and SQL layers |
+| Testability | Pure functions, explicit inputs/outputs, SQL you can `EXPLAIN` |
+
+---
+
+## Naming conventions
+
+### Python — descriptive names
+
+```python
+# ❌ Bad — unclear names
+d = datetime.now(timezone.utc)
+u = fetch_user(1)
+
+def calc(a, b):
+    return a * b
+
+# ✅ Good — intent-revealing
+run_timestamp_utc = datetime.now(timezone.utc)
+active_customer = fetch_user(customer_id)
+
+def calculate_line_total(unit_price: Decimal, quantity: int) -> Decimal:
+    return unit_price * quantity
+```
+
+### Python — consistent patterns
+
+```python
+# Booleans: is_, has_, should_, can_
+is_active = True
+has_admin_role = user.role == "admin"
+should_refresh_cache = cache_age_seconds > 300
+can_write = has_admin_role and is_active
+
+# Functions: verb + object
+def fetch_orders_since(since: datetime) -> list[Order]: ...
+def transform_bronze_to_silver(df: DataFrame) -> DataFrame: ...
+def validate_schema(rows: Iterable[dict]) -> None: ...
+
+# Pipeline stages (common in DE)
+def extract_from_api(endpoint: str) -> list[dict]: ...
+def load_to_bronze(records: list[dict], run_id: str) -> None: ...
+```
+
+### SQL — identifiers and aliases
+
+```sql
+-- ❌ Bad — cryptic aliases and vague columns
+SELECT o.id, u.n, SUM(l.p * l.q)
+FROM o JOIN u ON o.uid = u.id JOIN l ON l.oid = o.id
+GROUP BY o.id, u.n;
+
+-- ✅ Good — readable aliases; names match domain language
+SELECT
+    orders.order_id,
+    customers.email,
+    SUM(order_lines.unit_price * order_lines.quantity) AS line_revenue
+FROM orders
+INNER JOIN customers ON orders.customer_id = customers.customer_id
+INNER JOIN order_lines ON order_lines.order_id = orders.order_id
+GROUP BY orders.order_id, customers.email;
+```
+
+---
+
+## Functions and modules (Python)
+
+### Small, single-purpose functions
+
+```python
+# ❌ Bad — validates, aggregates, writes, and notifies in one block
+def process_daily_sales(raw_path: str) -> None:
+    rows = read_csv(raw_path)
+    if not rows:
+        raise ValueError("empty")
+    total = sum(float(r["amount"]) for r in rows)
+    if total < 0:
+        total = 0
+    conn.execute("INSERT INTO daily_totals VALUES (?)", (total,))
+    send_slack(f"Total {total}")
+
+# ✅ Good — steps are separate and named
+def validate_non_empty_rows(rows: list[dict]) -> None:
+    if not rows:
+        raise ValueError("Input rows must not be empty")
+
+def sum_amounts(rows: list[dict]) -> Decimal:
+    return sum(Decimal(str(r["amount"])) for r in rows)
+
+def persist_daily_total(total: Decimal, conn: Connection) -> None:
+    conn.execute("INSERT INTO daily_totals (total_amount) VALUES (?)", (str(total),))
+
+def process_daily_sales(raw_path: str, conn: Connection) -> Decimal:
+    rows = read_csv(raw_path)
+    validate_non_empty_rows(rows)
+    total = sum_amounts(rows)
+    persist_daily_total(total, conn)
+    return total
+```
+
+### Early returns (Python)
+
+```python
+# ❌ Bad — deep nesting
+def tier_discount(years_as_customer: int | None, is_premium: bool) -> float:
+    if years_as_customer is not None:
+        if is_premium:
+            if years_as_customer > 5:
+                return 0.30
+            else:
+                return 0.20
+        else:
+            return 0.10
+    return 0.0
+
+# ✅ Good — guard clauses
+def tier_discount(years_as_customer: int | None, is_premium: bool) -> float:
+    if years_as_customer is None:
+        return 0.0
+    if not is_premium:
+        return 0.10
+    if years_as_customer > 5:
+        return 0.30
+    return 0.20
+```
+
+---
+
+## SQL structure
+
+### Prefer CTEs for readable stages (warehouse / analytics SQL)
+
+```sql
+-- ❌ Bad — nested subqueries that hide the grain
+SELECT *
+FROM (
+    SELECT customer_id, SUM(amount) AS s
+    FROM (
+        SELECT * FROM sales WHERE sale_date >= DATE '2024-01-01'
+    ) x
+    GROUP BY customer_id
+) y
+WHERE y.s > 1000;
+
+-- ✅ Good — named steps; grain is obvious
+WITH daily_sales AS (
+    SELECT *
+    FROM sales
+    WHERE sale_date >= DATE '2024-01-01'
+),
+customer_totals AS (
+    SELECT
+        customer_id,
+        SUM(amount) AS total_amount
+    FROM daily_sales
+    GROUP BY customer_id
+)
+SELECT *
+FROM customer_totals
+WHERE total_amount > 1000;
+```
+
+### Filter early; avoid `SELECT *` in production transforms
+
+```sql
+-- ❌ Bad — drags unused columns through joins
+SELECT *
+FROM fact_orders
+INNER JOIN dim_customer ON fact_orders.customer_sk = dim_customer.customer_sk;
+
+-- ✅ Good — explicit columns for the layer you are building
+SELECT
+    fact_orders.order_id,
+    fact_orders.order_date,
+    dim_customer.country_code
+FROM fact_orders
+INNER JOIN dim_customer ON fact_orders.customer_sk = dim_customer.customer_sk
+WHERE fact_orders.order_date >= :start_date;
+```
+
+### One conceptual job per CTE (mirrors small functions in Python)
+
+```sql
+-- Each CTE = one transformation or filter step; easier to test mentally and to comment
+WITH source_filtered AS (
+    SELECT * FROM bronze_events WHERE event_date = CAST(:run_date AS DATE)
+),
+deduplicated AS (
+    SELECT * FROM (
+        SELECT
+            *,
+            ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY ingested_at DESC) AS rn
+        FROM source_filtered
+    ) t
+    WHERE rn = 1
+)
+SELECT * FROM deduplicated;
+```
+
+---
+
+## DRY (Python & SQL)
+
+### Python — extract shared validation
+
+```python
+# ❌ Bad — duplicated checks
+def insert_user(row: dict) -> None:
+    if not row.get("email"):
+        raise ValueError("email required")
+    if "@" not in row["email"]:
+        raise ValueError("invalid email")
+
+def update_user(row: dict) -> None:
+    if not row.get("email"):
+        raise ValueError("email required")
+    if "@" not in row["email"]:
+        raise ValueError("invalid email")
+
+# ✅ Good — one place for the rule
+def validate_email(email: str) -> None:
+    if not email:
+        raise ValueError("email required")
+    if "@" not in email:
+        raise ValueError("invalid email")
+
+def insert_user(row: dict) -> None:
+    validate_email(row["email"])
+    ...
+
+def update_user(row: dict) -> None:
+    validate_email(row["email"])
+    ...
+```
+
+### SQL — reuse logic via CTEs or views (not copy-pasted predicates)
+
+```sql
+-- ❌ Bad — same date filter repeated in two branches
+SELECT customer_id, SUM(amount) FROM sales WHERE sale_date >= DATE '2024-01-01' GROUP BY 1
+UNION ALL
+SELECT customer_id, SUM(refund) FROM refunds WHERE sale_date >= DATE '2024-01-01' GROUP BY 1;
+
+-- ✅ Good — define the window once
+WITH in_period AS (
+    SELECT * FROM sales WHERE sale_date >= DATE '2024-01-01'
+),
+refunds_in_period AS (
+    SELECT * FROM refunds WHERE sale_date >= DATE '2024-01-01'
+)
+SELECT customer_id, SUM(amount) AS revenue FROM in_period GROUP BY customer_id
+UNION ALL
+SELECT customer_id, SUM(refund) AS refunds FROM refunds_in_period GROUP BY customer_id;
+```
+
+---
+
+## SOLID (Python in pipelines)
+
+### Single responsibility — separate I/O from pure transforms
+
+```python
+# ❌ Bad — file + pandas + DB in one class doing everything
+class Pipeline:
+    def run(self, path: str) -> None:
+        df = pd.read_csv(path)
+        df["x"] = df["a"] + df["b"]
+        df.to_sql("out", self.engine, if_exists="replace")
+
+# ✅ Good — extract pure transform; I/O stays thin
+def add_computed_column(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["line_total"] = out["unit_price"] * out["quantity"]
+    return out
+
+def run_pipeline(path: str, engine: Engine) -> None:
+    df = pd.read_csv(path)
+    df = add_computed_column(df)
+    df.to_sql("silver_line_items", engine, if_exists="replace", index=False)
+```
+
+### Dependency injection — swap storage or clients in tests
+
+```python
+# ❌ Bad — hard-coded client inside business logic
+def fetch_records() -> list[dict]:
+    return requests.get("https://api.example.com/v1/data", timeout=30).json()
+
+# ✅ Good — inject client or base URL + session
+def fetch_records(client: requests.Session, base_url: str) -> list[dict]:
+    response = client.get(f"{base_url}/v1/data", timeout=30)
+    response.raise_for_status()
+    return response.json()
+```
+
+---
+
+## Error handling
+
+### Python — specific exceptions and context
+
+```python
+# ❌ Bad
+raise RuntimeError("failed")
+
+# ✅ Good — specific types + message for operators
+class SchemaValidationError(ValueError):
+    """Raised when incoming rows violate expected schema."""
+
+class SourceUnavailableError(OSError):
+    """Raised when upstream API or file is unreachable."""
+
+raise SchemaValidationError("Column 'order_id' missing in batch")
+raise SourceUnavailableError("API returned 503 after retries") from last_error
+```
+
+### Python — handle at boundaries (CLI, Airflow task, main)
+
+```python
+def main() -> None:
+    try:
+        run_etl()
+    except SchemaValidationError as exc:
+        logger.error("Validation failed: %s", exc)
+        raise SystemExit(1) from exc
+```
+
+### SQL — prefer explicit constraints in DDL; in queries, fail clearly in app layer
+
+- Use `NOT NULL`, `CHECK`, FKs where the warehouse supports them.
+- For transform SQL in jobs, document assumptions in comments when the engine cannot enforce them.
+
+---
+
+## Comments
+
+### Prefer self-explanatory code; comment **why**
+
+```python
+# ❌ Bad — narrates what the code obviously does
+# Increment i by 1
+i += 1
+
+# ✅ Good — business or data quirk
+# Source sends duplicate events within 60s; we keep the latest by ingest timestamp.
+df = df.sort_values("ingested_at").drop_duplicates(subset=["event_id"], keep="last")
+```
+
+```sql
+-- ✅ Good — source system quirk or SCD logic
+-- HubSpot exports NULL deal_id for legacy rows; we map to -1 for the surrogate key table.
+COALESCE(deal_id, -1) AS deal_surrogate_input
+```
+
+---
+
+##Guidelines
+
+### Clean Structure
+- Keep related code together
+- Organize code in a logical hierarchy
+- Use consistent file and folder naming conventions
+
+### Encapsulation
+- Hide implementation details
+- Expose clear interfaces
+- Move nested conditionals into well-named functions
+
+### Single Responsibility
+- Each function should do exactly one thing
+- Functions should be small and focused
+- If a function needs a comment to explain what it does, it should be split
+
+### Testing
+- Write tests before fixing bugs
+- Keep tests readable and maintainable
+- Test edge cases and error conditions
+
+### Version Control
+- Write clear commit messages
+- Make small, focused commits
+- Use meaningful branch names 
+
+---
+
+## Common mistakes
+
+| Mistake | Python fix | SQL fix |
+|---------|------------|---------|
+| Deep nesting | Early returns, smaller functions | CTEs, filter early |
+| Long scripts | Modules, `if __name__ == "__main__"` entry | One file per layer or logical model |
+| Unclear names | `snake_case`, domain terms | Meaningful aliases, `AS` for expressions |
+| Duplicated logic | Functions, modules | CTEs, views, macros (dbt) |
+| Silent failures | Log + re-raise or exit codes | Validate row counts after loads in app code |
+| No type hints | Add types to all functions |
+| Mutable default args | Use `field(default_factory=list)` |
+| Bare `except:` | Catch specific exceptions |
+| Using `dict` for data | Use dataclasses or Pydantic |
+| Blocking calls in async | Use async libraries (httpx, asyncpg) |
+| Global mutable state | Use dependency injection |
+
+---
+
+## Quick reference
+
+- **Python:** PEP 8 naming; type hints for public functions; logging instead of `print` in pipelines; `pathlib.Path` for paths.
+- **SQL:** Uppercase keywords optional but **be consistent**; always qualify column names in multi-table queries; document grain in a leading comment for complex queries.
