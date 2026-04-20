@@ -1,0 +1,89 @@
+# docker-compose.yml
+# ------------------
+# Starts a complete local Airflow environment: database + scheduler + web UI.
+
+# How to start:  cd airflow && docker-compose up -d
+# How to stop:   docker-compose down
+# View logs:     docker-compose logs -f airflow-scheduler
+# Access UI:     http://localhost:8080  (user: admin  password: admin)
+
+services:
+  
+  # ── PostgreSQL database ────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    environment: 
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:       # Persist the database data outside the container.
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:  # Docker waits for Postgres to be ready before starting Airflow.
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  # ── One-time database initialisation ──────────────────────────────────────
+  airflow-init:
+    build: .     # Build image from the Dockerfile in this same folder.
+    depends_on:
+      postgres:
+        condition: service_healthy  # Wait for Postgres to be ready first.
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false" # Don't show the tutorial DAGs.
+    command:
+      - bash
+      - -c
+      - airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com
+
+  
+  # ── Scheduler ─────────────────────────────────────────────────────────────
+  airflow-scheduler:
+    build: .
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      OPENFDA_API_KEY:    ${OPENFDA_API_KEY}
+      DATABRICKS_HOST:    ${DATABRICKS_HOST}
+      DATABRICKS_TOKEN:   ${DATABRICKS_TOKEN}
+      OPENFDA_MAX_PAGES:  ${OPENFDA_MAX_PAGES}
+    volumes:
+      - ./dags:/opt/airflow/dags      # Mount dags/ folder INTO the container.
+      - ./logs:/opt/airflow/logs      # Mount logs/ folder INTO the container.
+    command: airflow scheduler
+
+
+  # ── Web Server ───────────────────────────────────────────────────────────────
+  airflow-webserver:
+    build: .
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      OPENFDA_API_KEY:    ${OPENFDA_API_KEY}
+      DATABRICKS_HOST:    ${DATABRICKS_HOST}
+      DATABRICKS_TOKEN:   ${DATABRICKS_TOKEN}
+      OPENFDA_MAX_PAGES:  ${OPENFDA_MAX_PAGES}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+    command: airflow webserver 
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:                # For persistence.
