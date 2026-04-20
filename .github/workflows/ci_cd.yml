@@ -1,0 +1,115 @@
+# ci_cd.yml
+# ---------
+# Purpose  : CI = run tests automatically on every push.
+#            CD = deploy notebooks to Databricks when tests pass on main branch.
+#
+# How GitHub Actions works:
+#   1. You push code to GitHub.
+#   2. GitHub detects this file in .github/workflows/.
+#   3. GitHub spins up a fresh Ubuntu virtual machine (called a "runner").
+#   4. The runner checks out your code, installs Python, installs packages,
+#      and runs the steps you define here.
+#   5. If any step fails (non-zero exit code), the job fails and you get
+#      a red X on GitHub. The deploy job is blocked.
+#   6. The runner is destroyed after the job finishes.
+#
+# This runner is FREE on GitHub's free plan (2000 minutes/month).
+
+name: CI/CD - openFDA Lakehouse Pipeline
+
+# ── When to Trigger ───────────────────────────────────────────────────────────────
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+    branches: ["main"]
+
+# ── Jobs ─────────────────────────────────────────────────────────────────────────
+jobs:
+
+  # ── Job 1: CI - Run test on every ───────────────────────────────────────────────
+  test:
+    name: Run unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      
+      # Step 1: Download code into the runner machine
+      - name: Checkout code    # It runs git clone + git checkout internally.
+        uses: actions/checkout@v4
+
+      # Step 2: Install Python on the runner
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Step 3: Cache pip packages
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      # Step 4: Install dependencies
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      # Step 5: Run pytest with coverage
+      - name: Run tests with coverage report
+        run: |
+          pytest test/ \
+           --cov=src \
+           --cov-report=term-missing \
+           -v
+
+  # ── Job 2: CD - Deploy notebooks to Databricks when tests pass───────────────────
+  deploy:
+    name: Deploy notebooks to Databricks
+    runs-on: ubuntu-latest
+    needs: test  # Wait for tests to pass.
+    if: github.ref == 'refs/heads/main'  # Only deploy on main branch.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Databricks CLI
+        run: pip install databricks-cli  # Used to upload notebook files.
+
+      - name: Configure Databricks CLI
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          # Write the CLI config file that the databricks command reads.
+          mkdir -p ~/.databrickscfg
+          cat > ~/.databrickscfg << EOF
+          [DEFAULT]
+          host  = ${DATABRICKS_HOST}
+          token = ${DATABRICKS_TOKEN}
+          EOF
+
+      # Upload the Bronze ingestion script to the Databricks workspace.
+      # "workspace import" copies a local file to the Databricks notebook browser.
+      - name: Deploy Bronze ingestion script
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks workspace import \
+            databricks/bronze/bronze_ingestion.py \
+            /Shared/openfda/bronze/bronze_ingestion \
+            --language PYTHON \
+            --overwrite
+
+          echo "Deployment successful."
+          echo "Script is now at: Databricks Workspace → Shared → openfda → bronze → bronze_ingestion"
