@@ -1,1 +1,33 @@
+# Explanation files
 /docs/explanation
+
+# Secrets
+.env
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local temporary data (too large for Git)
+/tmp/
+*.json
+
+# Airflow logs and local database
+airflow/logs
+airflow/airflow.db
+airflow/*.pid
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
