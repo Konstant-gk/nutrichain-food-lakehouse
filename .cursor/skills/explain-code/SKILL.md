@@ -1,5 +1,5 @@
 ---
-name: companion-explanation-skill
+name: explain-code
 description: Create or update *_explanation.* sidecar files for portfolio code in absolute-beginner language with token-by-token explanation, following the framework in references/EXPLANATION_FRAMEWORK.md.
 ---
 
