@@ -1,1 +1,5 @@
-drug-label-*-of-0013.json.zip filter=lfs diff=lfs merge=lfs -text
+# Stable diffs and Linux CI: force LF in working tree for these text types on Windows.
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
