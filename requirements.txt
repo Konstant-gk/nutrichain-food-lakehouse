@@ -1,5 +1,6 @@
-requests==2.31.0
+requests>=2.31.0
 apache-airflow==2.9.0
 pytest==8.1.0
 pytest-cov==5.0.0
-python-dotenv==1.0.1
+python-dotenv>=1.0.0
+apache-airflow-providers-databricks>=6.0.0
