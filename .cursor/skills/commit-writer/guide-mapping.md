@@ -44,7 +44,13 @@ If no scope adds clarity, omit scope instead of forcing one.
 - specific subject lines with real technical nouns
 - consistent type/scope usage over time
 - no noisy commit subjects (`wip`, `updates`, `misc`)
-- commit body only when it adds why/risk context
+- a body under the subject (what + why) by default; only skip the body for truly trivial or revert-only commits
+- no editor/tool footers (for example `Made-with: ...`) in the message text
+
+## Bodies and automation
+
+- Prefer `git commit -m "subject" -m "body line one. Still same paragraph."` so the second `-m` becomes the body.
+- If the environment appends an unwanted hook footer to messages, the agent may use an empty `core.hooksPath` for that commit sequence or `git commit --no-verify` when appropriate (see the skill: never skip hooks that run tests or linters the user relies on).
 
 ## If unsure
 

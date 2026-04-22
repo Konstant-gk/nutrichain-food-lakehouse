@@ -1,6 +1,6 @@
 ---
 name: commit-writer
-description: Write professional Conventional Commit messages from staged or described changes, aligned to a provided commit guide. Use when the user asks for commit text, "what should I write in the commit", commit title/body help, recruiter-ready git history, or PR title suggestions.
+description: Write professional Conventional Commit messages (subject + body, no tool footers) from staged or described changes, aligned to a provided commit guide. Use when the user asks for commit text, "what should I write in the commit", commit title/body help, recruiter-ready git history, or PR title suggestions.
 ---
 
 # Pro commit writer
@@ -57,14 +57,28 @@ Rules:
 - specific and concrete, avoid generic words like `update stuff`
 - keep it short but informative
 
-### Step 4: add body only when needed
+### Step 4: always add a body (not subject-only)
 
-Add a body when context matters:
-- why this change exists
-- what risk or tradeoff it handles
-- test/migration notes (if relevant)
+Default to a **non-empty body** for every commit you draft or help land (subject + blank line + body). The body is how reviewers and future you learn **what changed in plain terms** and **why it was done** without opening the diff.
 
-Keep body lines practical and scan-friendly.
+In the body, include one or more of:
+- what the change does (in concrete terms: APIs, paths, job names, env vars)
+- why it exists (constraint, bug, follow-up, migration)
+- risk, rollout, or test notes when relevant (for example, new secrets, Airflow variables, Databricks path changes)
+
+**Exceptions** (body may be a single short line, not omitted): truly trivial one-file typo fixes, or a pure revert where the subject already tells the full story. When in doubt, add a one-sentence body.
+
+Keep the body practical and scannable; avoid repeating the subject line.
+
+### Step 4b: no tool or editor footers (mandatory)
+
+Never put these in a commit message unless the user explicitly asked for them:
+- lines like `Made-with: …`, `Generated-by: …`, or other editor/IDE product plugs
+- Co-authored-by or similar trailer lines, unless the user requested attribution for real co-authors
+
+Provenance belongs in the PR description or release notes, not the Git trailer block at the end of a commit. If a local hook or editor appends a footer, create commits with an empty `core.hooksPath` (pointing at an empty directory) or, when safe, `git commit --no-verify`—only to skip `commit-msg` noise, not to bypass project `pre-commit` tests a human relies on.
+
+This keeps history portable and free of marketing or accidental noise in `git log`.
 
 ### Step 5: produce final output options
 
@@ -81,11 +95,14 @@ Never output:
 - `wip`, `misc`, `updates`, `final`, `temp`, `quick fix`
 - inflated claims not supported by the diff
 - mixed unrelated changes in one message
+- subject-only messages when a body would add real context (the default is subject **plus** body)
+- tool branding footers (see Step 4b)
 
 Prefer:
 - truthful and scoped language
 - clean commit history that tells a project story
 - wording that signals engineering discipline
+- every commit in a batch the user is landing includes a meaningful body
 
 ## Response template
 
@@ -95,7 +112,7 @@ Use this exact structure unless the user asks for a different format:
 Recommended
 type(scope): subject
 
-[optional body]
+<body: what changed and why; 1-4 short lines unless the user asked for terser output>
 
 Alternatives
 - type(scope): subject
@@ -119,6 +136,8 @@ Output:
 Recommended
 chore(deps): add initial Python project dependencies
 
+Introduces a pinned requirements.txt so Airflow, pytest, and HTTP clients are reproducible in CI and local venv. Sets the baseline for later pipeline and provider packages.
+
 Alternatives
 - build(deps): add base runtime and test dependencies
 - chore(config): bootstrap dependency list for pipeline setup
@@ -138,6 +157,8 @@ Output:
 ```text
 Recommended
 fix(silver): remove duplicate rows caused by join mismatch
+
+The previous join could match one source row to many dimension rows; tightening the join key removes the fan-out in the silver transform. Re-run or backfill the affected partition after deploy.
 
 Alternatives
 - fix(sql): correct join condition in silver transform
