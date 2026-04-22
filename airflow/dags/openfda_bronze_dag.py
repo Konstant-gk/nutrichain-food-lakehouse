@@ -6,9 +6,13 @@ Purpose : Airflow DAG — full pipeline from API fetch to Gold Delta table.
 Task order:
     1. fetch_openfda_pages   — calls openFDA API, saves JSON locally
     2. upload_to_volume      — uploads JSON to Databricks UC Volume
-    3. trigger_bronze_job    — Databricks job: Volume → Bronze Delta table
-    4. trigger_silver_job    — Databricks job: Bronze Delta → Silver Delta
-    5. trigger_gold_job      — Databricks job: Silver Delta → Gold Delta
+    3. trigger_bronze_job    — Databricks job (Python file): Volume → Bronze Delta table
+    4. trigger_silver_job    — Databricks job (Python file): Bronze Delta → Silver Delta
+    5. trigger_gold_job      — Databricks job (Python file): Silver Delta → Gold Delta
+
+    Each Databricks job is triggered with ``job_parameters`` (not ``notebook_params``) so
+    the Run-now API matches Python file tasks. Job definitions must declare the same
+    parameter keys in the Databricks UI; see databricks/JOB_PARAMETER_SETUP.md.
 
 WHY AIRFLOW DOES ALL EXTERNAL CALLS:
     Databricks Free Edition restricts outbound internet from serverless compute.
@@ -47,6 +51,7 @@ GOLD_SCHEMA = os.getenv("DATABRICKS_GOLD_SCHEMA", "gold")
 BRONZE_TABLE = os.getenv("DATABRICKS_BRONZE_TABLE", "bronze_openfda_drug_labeling_raw")
 SILVER_TABLE = os.getenv("DATABRICKS_SILVER_TABLE", "silver_openfda_drug_labeling")
 GOLD_TABLE = os.getenv("DATABRICKS_GOLD_TABLE", "gold_openfda_drug_labeling")
+GOLD_FLAGS_TABLE = os.getenv("DATABRICKS_GOLD_FLAGS_TABLE", "gold_label_section_flags")
 
 
 default_args = {
@@ -114,16 +119,16 @@ with DAG(
         python_callable=task_upload,
     )
 
-    # Task 3: Trigger Bronze Databricks Job
+    # Task 3: Trigger Bronze Databricks Job (Python file task: argv via job parameters in Databricks)
     bronze_job = DatabricksRunNowOperator(
     task_id="trigger_bronze_job",
     databricks_conn_id="databricks_default",
     job_id="{{ var.value.databricks_bronze_job_id }}",
-    notebook_params={
-        "run_id": "{{ ds_nodash }}",       
-        "catalog": CATALOG,                 
-        "schema": BRONZE_SCHEMA,            
-        "table": BRONZE_TABLE,           
+    job_parameters={
+        "run_id": "{{ ds_nodash }}",
+        "catalog": CATALOG,
+        "schema": BRONZE_SCHEMA,
+        "table": BRONZE_TABLE,
     },
     wait_for_termination=True,
     )
@@ -133,7 +138,7 @@ with DAG(
     task_id="trigger_silver_job",
     databricks_conn_id="databricks_default",
     job_id="{{ var.value.databricks_silver_job_id }}",
-    notebook_params={
+    job_parameters={
         "run_id": "{{ ds_nodash }}",
         "catalog": CATALOG,
         "bronze_schema": BRONZE_SCHEMA,
@@ -149,13 +154,14 @@ with DAG(
     task_id="trigger_gold_job",
     databricks_conn_id="databricks_default",
     job_id="{{ var.value.databricks_gold_job_id }}",
-    notebook_params={
+    job_parameters={
         "run_id": "{{ ds_nodash }}",
         "catalog": CATALOG,
         "silver_schema": SILVER_SCHEMA,
         "gold_schema": GOLD_SCHEMA,
         "silver_table": SILVER_TABLE,
         "gold_table": GOLD_TABLE,
+        "gold_flags_table": GOLD_FLAGS_TABLE,
     },
     wait_for_termination=True,
     )

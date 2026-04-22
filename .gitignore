@@ -12,6 +12,9 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Local Databricks job-parameter notes (not shared in public history)
+databricks/JOB_PARAMETER_SETUP.md
+
 # Local temporary data (too large for Git)
 /tmp/
 *.json
