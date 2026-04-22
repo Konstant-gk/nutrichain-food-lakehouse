@@ -1,132 +1,193 @@
 """
 upload.py
 ---------
-Purpose  : Upload local JSON files from a run directory to Databricks DBFS.
-
-Data flow: local disk (JSON files)  →  HTTPS POST  →  Databricks DBFS
-
-Why base64?
-    The Databricks /dbfs/put API accepts JSON request bodies. JSON is text.
-    File contents are raw bytes, which may include characters that break JSON.
-    Base64 encoding converts any bytes to safe ASCII text, which JSON handles
-    perfectly. Databricks decodes it back on the other side.
-
-Why one file at a time?
-    The Community Edition /dbfs/put endpoint works best with files under 1 MB.
-    Our files are ~100-200 KB each. Uploading one at a time is simpler, more
-    reliable, and easier to retry if one file fails.
+Purpose : Upload local JSON files from a run directory to a Databricks
+          Unity Catalog Volume using the Files API.
 
 Prerequisites:
-    DATABRICKS_HOST  env var
-    DATABRICKS_TOKEN env var
+    DATABRICKS_HOST  env var — e.g. https://adb-xxxx.azuredatabricks.net
+    DATABRICKS_TOKEN env var — Databricks personal access token
+    A UC Volume must exist at /Volumes/dev/openfda/landing/
+    (create it once in Databricks UI: Catalog → your schema → New Volume)
 """
 
-import os
-import base64
+from __future__ import annotations
+
 import logging
+import os
+import time
 from pathlib import Path
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-DBFS_BASE_PATH = "/FileStore/openfda/bronze/raw"
+# Defaults can be overridden from environment.
+DEFAULT_VOLUME_BASE_PATH = "/Volumes/openfda_lakehouse/bronze/raw_json_landing"
+DEFAULT_MAX_FILE_MB = "10"
+DEFAULT_TIMEOUT_SECONDS = "60"
+DEFAULT_MAX_RETRIES = "3"
+DEFAULT_BACKOFF_SECONDS = "1.5"
 
-def get_dbfs_credentials() -> tuple[str, str]:
- 
+
+def get_files_api_credentials() -> tuple[str, str]:
     host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
     token = os.environ.get("DATABRICKS_TOKEN", "")
 
     if not host:
         raise EnvironmentError(
-            "DATABRICKS_HOST is not set"
-            "Add it to your .env file or environment"
+            "DATABRICKS_HOST is not set. Add it to your .env/environment."
         )
     if not token:
         raise EnvironmentError(
-            "DATABRICKS_TOKEN is not set"
-            "Add it to your .env file or environment"
+            "DATABRICKS_TOKEN is not set. Add it to your .env/environment."
         )
-
     return host, token
 
-def upload_file_to_dbfs(
-    local_filepath: Path,
-    dbfs_target_path: str,
-    host: str,
+
+def _validate_volume_base_path(path: str) -> str:
+    normalized = path.strip().rstrip("/")
+    if not normalized.startswith("/Volumes/"):
+        raise ValueError(
+            f"DATABRICKS_VOLUME_PATH must start with '/Volumes/'. Got: {path}"
+        )
+    return normalized
+
+
+def _get_max_file_size_bytes() -> int:
+    raw_value = os.getenv("DATABRICKS_MAX_FILE_MB", DEFAULT_MAX_FILE_MB)
+    try:
+        mb = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(
+            f"DATABRICKS_MAX_FILE_MB must be an integer. Got: {raw_value}"
+        ) from exc
+
+    if mb <= 0:
+        raise ValueError("DATABRICKS_MAX_FILE_MB must be > 0.")
+    return mb * 1024 * 1024
+
+
+def _put_file_with_retry(
+    url: str,
     token: str,
-) -> bool:
-    
-    # Read the file as raw bytes.
-    with open(local_filepath, "rb") as f:
-        file_bytes = f.read()
-
-    # Encode bytes to base64 string. The Databricks API requires this.
-    file_b64 = base64.b64encode(file_bytes).decode("utf-8")
-    
-    # Build the JSON payload for the /dbfs/put endpoint.
-    payload = {
-        "path": dbfs_target_path,
-        "contents": file_b64,
-        "overwrite": True
-    }
-
+    local_file: Path,
+    timeout_seconds: int,
+    max_retries: int,
+    backoff_seconds: float,
+) -> None:
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/octet-stream",
     }
 
-    url = f"{host}/api/2.0/dbfs/put"
+    for attempt in range(max_retries + 1):
+        try:
+            # Stream file bytes directly; avoids loading full file into memory.
+            with open(local_file, "rb") as file_handle:
+                response = requests.put(
+                    url,
+                    headers=headers,
+                    data=file_handle,
+                    timeout=timeout_seconds,
+                )
+        except requests.RequestException as exc:
+            if attempt < max_retries:
+                sleep_s = backoff_seconds * (2 ** attempt)
+                logger.warning(
+                    "Network/upload error for %s (attempt %d/%d): %s. Retrying in %.1fs",
+                    local_file.name,
+                    attempt + 1,
+                    max_retries + 1,
+                    exc,
+                    sleep_s,
+                )
+                time.sleep(sleep_s)
+                continue
+            raise RuntimeError(f"Upload failed for {local_file.name}: {exc}") from exc
 
-    logger.info(
-        "Uploading %s -> dbfs:%s", local_filepath.name, dbfs_target_path
+        if response.status_code in (200, 201, 204):
+            return
+
+        retryable_statuses = {408, 429, 500, 502, 503, 504}
+        if response.status_code in retryable_statuses and attempt < max_retries:
+            sleep_s = backoff_seconds * (2 ** attempt)
+            logger.warning(
+                "Retryable HTTP status for %s: %s (attempt %d/%d). Retrying in %.1fs",
+                local_file.name,
+                response.status_code,
+                attempt + 1,
+                max_retries + 1,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
+            continue
+
+        raise RuntimeError(
+            f"Upload failed for {local_file.name}: "
+            f"HTTP {response.status_code} - {response.text}"
+        )
+
+    raise RuntimeError(f"Upload failed for {local_file.name}: retries exhausted.")
+
+
+def upload_run_to_volume(local_dir: str, run_id: str) -> list[str]:
+    host, token = get_files_api_credentials()
+
+    volume_base_path = _validate_volume_base_path(
+        os.getenv("DATABRICKS_VOLUME_PATH", DEFAULT_VOLUME_BASE_PATH)
     )
+    max_file_size_bytes = _get_max_file_size_bytes()
 
-    response = requests.post(url, headers=headers, json=payload, timeout=60)
-    response.raise_for_status()
-
-    logger.info("Upload successful: %s", local_filepath.name)
-    return True
-
-
-
-def upload_run_to_dbfs(local_dir: str, run_id: str) -> list[str]:
-    
-    host, token = get_dbfs_credentials()
-
-    # Build the DBFS subfolder for this specific run.
-    dbfs_run_folder = f"{DBFS_BASE_PATH}/{run_id}"
+    timeout_seconds = int(os.getenv("DATABRICKS_UPLOAD_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+    max_retries = int(os.getenv("DATABRICKS_UPLOAD_MAX_RETRIES", DEFAULT_MAX_RETRIES))
+    backoff_seconds = float(os.getenv("DATABRICKS_UPLOAD_BACKOFF_SECONDS", DEFAULT_BACKOFF_SECONDS))
 
     local_path = Path(local_dir)
     json_files = sorted(local_path.glob("*.json"))
-
     if not json_files:
-        logger.warning("No JSON files found in %s. Nothing to upload.", local_dir)
-        return[]
+        logger.warning("No JSON files found in %s; nothing uploaded.", local_dir)
+        return []
+
+    volume_run_path = f"{volume_base_path}/{run_id}"
+    uploaded_paths: list[str] = []
 
     logger.info(
-        "Starting upload of %d files from %s to dbfs:%s",
-        len(json_files), local_dir, dbfs_run_folder
+        "Starting upload of %d JSON files from %s to %s",
+        len(json_files),
+        local_dir,
+        volume_run_path,
     )
-
-    uploaded_paths = []
 
     for local_file in json_files:
-        dbfs_target = f"{dbfs_run_folder}/{local_file.name}"
+        file_size = local_file.stat().st_size
+        if file_size > max_file_size_bytes:
+            raise RuntimeError(
+                f"File too large for configured cap: {local_file.name} "
+                f"({file_size} bytes > {max_file_size_bytes} bytes). "
+                "Split upstream or increase DATABRICKS_MAX_FILE_MB."
+            )
 
-        upload_file_to_dbfs(
-            local_filepath=local_file,
-            dbfs_target_path=dbfs_target,
-            host=host,
+        volume_file_path = f"{volume_run_path}/{local_file.name}"
+        url = f"{host}/api/2.0/fs/files{volume_file_path}"
+
+        logger.info("Uploading %s -> %s", local_file.name, volume_file_path)
+
+        _put_file_with_retry(
+            url=url,
             token=token,
+            local_file=local_file,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            backoff_seconds=backoff_seconds,
         )
 
-        uploaded_paths.append(dbfs_target)
+        uploaded_paths.append(volume_file_path)
+        logger.info("Uploaded %s", local_file.name)
 
     logger.info(
-        "Upload complete. %d files uploaded to dbfs:%s",
-        len(uploaded_paths), dbfs_run_folder
+        "Upload complete. %d files uploaded to %s",
+        len(uploaded_paths),
+        volume_run_path,
     )
-
     return uploaded_paths
-    
