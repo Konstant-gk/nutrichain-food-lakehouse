@@ -123,6 +123,13 @@ def fetch_all_pages(
         if response is None:
             raise RuntimeError(f"No response received for page {page_num + 1}.")
 
+        # if all retries rate-limited, the last response is still a 429
+        if response.status_code == 429:
+            raise RuntimeError(
+                f"Page {page_num + 1} still rate-limited after {max_retries} attempts. "
+                "Increase the POLITE_DELAY_SECONDS or reduce MAX_PAGES."
+            )
+
         # Parse the response JSON
         data = response.json()
         results = data.get("results", [])
