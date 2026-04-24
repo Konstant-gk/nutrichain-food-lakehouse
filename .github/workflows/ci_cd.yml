@@ -1,5 +1,9 @@
 name: CI/CD - NutriChain Food Lakehouse Pipeline
 
+env:
+  # Opt into Node 24 runtime for JavaScript actions ahead of deprecation.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 on:
   push:
     branches: ["**"]
@@ -13,10 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -46,10 +50,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -72,7 +76,7 @@ jobs:
         run: |
           databricks workspace import \
             databricks/bronze/bronze_ingestion.py \
-            /Shared/nutrichain/bronze/bronze_ingestion \
+            /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/bronze/bronze_ingestion \
             --language PYTHON \
             --overwrite
 
@@ -80,7 +84,7 @@ jobs:
         run: |
           databricks workspace import \
             databricks/silver/silver_transform.py \
-            /Shared/nutrichain/silver/silver_transform \
+            /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/silver/silver_transform \
             --language PYTHON \
             --overwrite
 
@@ -88,13 +92,13 @@ jobs:
         run: |
           databricks workspace import \
             databricks/gold/gold_mart.py \
-            /Shared/nutrichain/gold/gold_mart \
+            /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/gold/gold_mart \
             --language PYTHON \
             --overwrite
 
       - name: Deployment summary
         run: |
           echo "✓ Deployment successful."
-          echo "Bronze : /Shared/nutrichain/bronze/bronze_ingestion"
-          echo "Silver : /Shared/nutrichain/silver/silver_transform"
-          echo "Gold   : /Shared/nutrichain/gold/gold_mart"
+          echo "Bronze : /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/bronze/bronze_ingestion"
+          echo "Silver : /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/silver/silver_transform"
+          echo "Gold   : /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/gold/gold_mart"
