@@ -1,0 +1,94 @@
+# dbt/models/gold/schema.yml
+# ---------------------------
+# Documents and tests for all Gold layer models.
+# Run with: dbt test
+# Document with: dbt docs generate && dbt docs serve
+
+version: 2
+
+models:
+
+  - name: dim_product
+    description: "Product dimension — one row per unique product (barcode)."
+    columns:
+      - name: product_key
+        description: "Surrogate key — SHA-256 of barcode."
+        tests:
+          - not_null
+          - unique
+      - name: product_id
+        description: "Natural key — EAN barcode."
+        tests:
+          - not_null
+          - unique
+      - name: nova_group
+        description: "NOVA food processing group: 1=unprocessed, 4=ultra-processed."
+        tests:
+          - accepted_values:
+              values: [1, 2, 3, 4]
+
+  - name: dim_brand
+    description: "Brand dimension — one row per unique brand name."
+    columns:
+      - name: brand_key
+        tests:
+          - not_null
+          - unique
+      - name: brand_name
+        tests:
+          - not_null
+
+  - name: dim_category
+    description: "Food category dimension — one row per unique category."
+    columns:
+      - name: category_key
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_country
+    description: "Country dimension — one row per unique country."
+    columns:
+      - name: country_key
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_nutriscore
+    description: "Nutri-Score grade lookup — 5 grades A through E plus unknown."
+    columns:
+      - name: grade
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['a', 'b', 'c', 'd', 'e', 'unknown']
+
+  - name: fact_product_nutrition
+    description: >
+      Central fact table — one row per product per snapshot date.
+      Contains all nutrition measures, category benchmarks, rankings, and flags.
+      Joins to all 5 dimension tables via _key foreign key columns.
+    columns:
+      - name: product_key
+        description: "FK to dim_product.product_key"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_product')
+              field: product_key
+      - name: brand_key
+        description: "FK to dim_brand.brand_key"
+        tests:
+          - not_null
+      - name: category_key
+        description: "FK to dim_category.category_key"
+        tests:
+          - not_null
+      - name: snapshot_date
+        description: "Date when this snapshot was taken (= Airflow run date)."
+        tests:
+          - not_null
+      - name: nutriscore_grade_mismatch
+        description: "TRUE if reported grade does not match the official formula."
+      - name: healthiness_rank_in_category
+        description: "Rank 1 = healthiest product in that food category."

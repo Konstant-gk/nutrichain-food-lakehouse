@@ -36,3 +36,5 @@ env/
 .vscode/
 *.swp
 dbt/profiles.yml
+dbt/logs/
+dbt/target/

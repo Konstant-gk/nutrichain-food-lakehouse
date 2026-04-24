@@ -1,0 +1,32 @@
+# dbt/models/silver/sources.yml
+# ------------------------------
+# Declares external tables that dbt does not build itself.
+# Silver is built by PySpark (silver_transform.py).
+# We declare it here so dbt Gold models can reference it with source().
+
+version: 2
+
+sources:
+  - name: silver
+    database: nutrichain_lakehouse    # Unity Catalog name
+    schema: silver                    # Schema name in Databricks
+    description: >
+      Silver layer — cleaned and enriched Open Food Facts product data.
+      Built by PySpark silver_transform.py, orchestrated by Airflow.
+    tables:
+      - name: silver_openfood_products
+        description: >
+          One row per unique product (deduplicated by barcode).
+          All nutrition values normalized to per 100g in kcal.
+          Sodium corrected from salt where missing.
+          Sugar/fat/salt tiers applied using EU thresholds.
+        columns:
+          - name: barcode
+            description: "Product barcode — primary key. EAN-13 format."
+            tests:
+              - not_null
+              - unique
+          - name: energy_kcal_per_100g
+            description: "Energy normalized to kcal per 100g. Converted from kJ where needed."
+          - name: nutriscore_grade_mismatch
+            description: "True if reported grade does not match recalculated grade."
