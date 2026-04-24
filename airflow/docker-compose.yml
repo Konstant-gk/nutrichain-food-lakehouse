@@ -6,7 +6,7 @@
 # How to stop:   docker-compose down
 # View logs:     docker-compose logs -f airflow-scheduler
 # Access UI:     http://localhost:8080  
-name: openfda-lakehouse
+name: nutrichain-lakehouse
 services:
   
   # ── PostgreSQL database ────────────────────────────────────────────────────
@@ -61,10 +61,9 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      OPENFDA_API_KEY:    ${OPENFDA_API_KEY}
       DATABRICKS_HOST:    ${DATABRICKS_HOST}
       DATABRICKS_TOKEN:   ${DATABRICKS_TOKEN}
-      OPENFDA_MAX_PAGES:  ${OPENFDA_MAX_PAGES}
+      OPENFOOD_MAX_PAGES: ${OPENFOOD_MAX_PAGES}
       PYTHONPATH: /opt/airflow/src
     volumes:
       - ./dags:/opt/airflow/dags      # Mount dags/ folder INTO the container.
@@ -90,10 +89,9 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      OPENFDA_API_KEY:    ${OPENFDA_API_KEY}
       DATABRICKS_HOST:    ${DATABRICKS_HOST}
       DATABRICKS_TOKEN:   ${DATABRICKS_TOKEN}
-      OPENFDA_MAX_PAGES:  ${OPENFDA_MAX_PAGES}
+      OPENFOOD_MAX_PAGES: ${OPENFOOD_MAX_PAGES}
       PYTHONPATH: /opt/airflow/src
     volumes:
       - ./dags:/opt/airflow/dags
