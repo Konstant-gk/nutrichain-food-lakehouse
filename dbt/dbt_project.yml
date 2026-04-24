@@ -1,0 +1,36 @@
+# dbt/dbt_project.yml
+# -------------------
+# This is the main configuration file for the NutriChain dbt project.
+# dbt reads this file first every time you run any dbt command.
+
+name: 'nutrichain_dbt'          # Name of this dbt project (used in logs)
+version: '1.0.0'
+config-version: 2               # Always 2 for modern dbt
+
+# Tell dbt where to find the profile that has Databricks connection details
+# The profile name here must match a name in profiles.yml
+profile: 'nutrichain_databricks'
+
+# Tell dbt where to find the SQL model files
+model-paths: ["models"]         # Look in the dbt/models/ folder
+test-paths: ["tests"]           # Look in dbt/tests/ for custom tests
+seed-paths: ["seeds"]           # CSVs that dbt can load as tables
+analysis-paths: ["analyses"]
+macro-paths: ["macros"]
+
+# Where dbt stores compiled SQL and run results (never commit this)
+target-path: "target"
+clean-targets:
+  - "target"
+
+# Model configuration — defines how each model is materialized
+# materialized: table  → dbt creates a real Delta table
+# materialized: view   → dbt creates a SQL view (no data stored, computed on query)
+models:
+  nutrichain_dbt:
+    silver:
+      +materialized: table      # Silver models = real Delta tables
+      +schema: silver           # Write to the silver schema in Unity Catalog
+    gold:
+      +materialized: table      # Gold models = real Delta tables
+      +schema: gold             # Write to the gold schema in Unity Catalog
