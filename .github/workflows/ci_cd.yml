@@ -1,4 +1,4 @@
-name: CI/CD - openFDA Lakehouse Pipeline
+name: CI/CD - NutriChain Food Lakehouse Pipeline
 
 on:
   push:
@@ -11,18 +11,17 @@ jobs:
   test:
     name: Run unit tests
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Cache pip packages
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
@@ -45,13 +44,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/main'
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -62,6 +60,7 @@ jobs:
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
         run: |
           cat > ~/.databrickscfg << EOF
           [DEFAULT]
@@ -69,33 +68,33 @@ jobs:
           token = ${DATABRICKS_TOKEN}
           EOF
 
-      - name: Deploy Bronze notebook
+      - name: Deploy Bronze job script
         run: |
           databricks workspace import \
             databricks/bronze/bronze_ingestion.py \
-            /Shared/openfda/bronze/bronze_ingestion \
+            /Shared/nutrichain/bronze/bronze_ingestion \
             --language PYTHON \
             --overwrite
 
-      - name: Deploy Silver notebook
+      - name: Deploy Silver job script
         run: |
           databricks workspace import \
             databricks/silver/silver_transform.py \
-            /Shared/openfda/silver/silver_transform \
+            /Shared/nutrichain/silver/silver_transform \
             --language PYTHON \
             --overwrite
 
-      - name: Deploy Gold notebook
+      - name: Deploy Gold job script
         run: |
           databricks workspace import \
             databricks/gold/gold_mart.py \
-            /Shared/openfda/gold/gold_mart \
+            /Shared/nutrichain/gold/gold_mart \
             --language PYTHON \
             --overwrite
 
       - name: Deployment summary
         run: |
-          echo "Deployment successful."
-          echo "Bronze: /Shared/openfda/bronze/bronze_ingestion"
-          echo "Silver: /Shared/openfda/silver/silver_transform"
-          echo "Gold:   /Shared/openfda/gold/gold_mart"
+          echo "✓ Deployment successful."
+          echo "Bronze : /Shared/nutrichain/bronze/bronze_ingestion"
+          echo "Silver : /Shared/nutrichain/silver/silver_transform"
+          echo "Gold   : /Shared/nutrichain/gold/gold_mart"
