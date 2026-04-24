@@ -3,6 +3,7 @@
 
 # Secrets
 .env
+dbt/dbt_profiles.yml
 
 # Python cache and compiled files
 __pycache__/
@@ -12,7 +13,7 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Local Databricks job-parameter notes (not shared in public history)
+# Local Databricks job-parameter notes 
 databricks/JOB_PARAMETER_SETUP.md
 
 # Local temporary data (too large for Git)
@@ -34,3 +35,4 @@ env/
 .idea/
 .vscode/
 *.swp
+dbt/profiles.yml
