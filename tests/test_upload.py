@@ -1,7 +1,7 @@
 """
 test_upload.py
 --------------
-Unit tests for src/openfda/upload.py.
+Unit tests for src/openfood/upload.py.
 
 We mock the Databricks HTTP API so tests run instantly without
 needing real Databricks credentials or a real workspace.
@@ -14,7 +14,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from src.openfda.upload import upload_run_to_volume, get_files_api_credentials
+from src.openfood.upload import upload_run_to_volume, get_files_api_credentials
 
 
 class TestGetFilesApiCredentials:
@@ -63,10 +63,10 @@ class TestUploadRunToVolume:
                 self._write_fake_json_file(
                     tmp_dir,
                     f"run_test_page_{i+1:04d}.json",
-                    {"page": i + 1, "results": []}
+                    {"page": i + 1, "products": []}
                 )
 
-            with patch("src.openfda.upload.requests.put") as mock_put:
+            with patch("src.openfood.upload.requests.put") as mock_put:
                 fake_response = MagicMock()
                 fake_response.status_code = 204
                 fake_response.text = ""
@@ -86,7 +86,7 @@ class TestUploadRunToVolume:
         monkeypatch.setenv("DATABRICKS_TOKEN", "dapi_fake")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            with patch("src.openfda.upload.requests.put") as mock_put:
+            with patch("src.openfood.upload.requests.put") as mock_put:
                 uploaded = upload_run_to_volume(local_dir=tmp_dir, run_id="empty_run")
 
         assert uploaded == []
@@ -103,7 +103,7 @@ class TestUploadRunToVolume:
         with tempfile.TemporaryDirectory() as tmp_dir:
             self._write_fake_json_file(tmp_dir, "run_myrun_page_0001.json", {})
 
-            with patch("src.openfda.upload.requests.put") as mock_put:
+            with patch("src.openfood.upload.requests.put") as mock_put:
                 fake_response = MagicMock()
                 fake_response.status_code = 204
                 fake_response.text = ""
