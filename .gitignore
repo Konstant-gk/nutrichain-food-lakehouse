@@ -38,3 +38,8 @@ env/
 dbt/profiles.yml
 dbt/logs/
 dbt/target/
+# Local query/debug artifacts only — do not use bare *.sql (would ignore dbt/models).
+logs/*.log
+logs/*.sql
+dbt/logs/*.log
+dbt/logs/*.sql
