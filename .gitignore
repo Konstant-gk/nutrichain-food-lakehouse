@@ -44,3 +44,6 @@ logs/*.log
 logs/*.sql
 dbt/logs/*.log
 dbt/logs/*.sql
+
+# Accidental nested checkout (duplicate repo folder under project root)
+/nutrichain-food-lakehouse/
