@@ -36,6 +36,7 @@ env/
 .vscode/
 *.swp
 dbt/profiles.yml
+dbt/.user.yml
 dbt/logs/
 dbt/target/
 # Local query/debug artifacts only — do not use bare *.sql (would ignore dbt/models).
