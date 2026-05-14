@@ -16,10 +16,10 @@ sources:
     tables:
       - name: silver_openfood_products
         description: >
-          One row per unique product (deduplicated by barcode).
-          All nutrition values normalized to per 100g in kcal.
-          Sodium corrected from salt where missing.
-          Sugar/fat/salt tiers applied using EU thresholds.
+          One row per product (barcode). Nutrition per 100g, tiers, Nutri-Score fields.
+          Built only by PySpark (silver_transform.py). dbt reads it through
+          models/silver/silver_openfood_products.sql (ephemeral) so Gold can use ref();
+          dbt never writes this Delta table.
         columns:
           - name: barcode
             description: "Product barcode — primary key. EAN-13 format."

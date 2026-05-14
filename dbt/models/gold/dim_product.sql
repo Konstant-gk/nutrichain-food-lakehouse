@@ -48,8 +48,20 @@ final AS (
         nutriscore_grade_mismatch,
 
         -- Foreign keys to other dims (sha2 of natural key = same as in dim tables)
-        SHA2(primary_brand, 256)    AS brand_key,
-        SHA2(primary_category, 256) AS category_key,
+        SHA2(
+            COALESCE(
+                NULLIF(TRIM(CAST(primary_brand AS STRING)), ''),
+                'Unknown'
+            ),
+            256
+        )    AS brand_key,
+        SHA2(
+            COALESCE(
+                NULLIF(TRIM(CAST(primary_category AS STRING)), ''),
+                'Unknown'
+            ),
+            256
+        ) AS category_key,
         SHA2(primary_country, 256)  AS country_key,
 
         -- Metadata

@@ -1,12 +1,13 @@
 -- dbt/models/silver/silver_openfood_products.sql
 -- -----------------------------------------------
--- Purpose: Expose the PySpark-built Silver Delta table as a dbt source.
--- This model creates a view that Gold models can reference using ref().
+-- PySpark (`silver_transform.py`) is the ONLY writer to the Delta table
+-- `source('silver', 'silver_openfood_products')`. dbt does not rebuild Silver.
 --
--- Why ref() instead of hardcoding the table name?
--- ref('silver_openfood_products') tells dbt that this Gold model DEPENDS
--- on the Silver model. dbt uses this to build a dependency graph and
--- always runs Silver before Gold automatically.
+-- This model is **ephemeral** (`dbt_project.yml` → `silver:`): compiled as an inlined
+-- CTE inside Gold models — no second physical Silver table.
+--
+-- Alternative pattern some teams use: Gold calls source() directly and deletes
+-- this file. We keep one ephemeral "bridge" so all Gold models depend on one node.
 
 SELECT
     -- Identity
@@ -57,5 +58,4 @@ SELECT
 
 FROM {{ source('silver', 'silver_openfood_products') }}
 
--- Only include rows where barcode exists (our primary key)
 WHERE barcode IS NOT NULL

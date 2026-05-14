@@ -28,9 +28,9 @@ clean-targets:
 # materialized: view   → dbt creates a SQL view (no data stored, computed on query)
 models:
   nutrichain_dbt:
+    # PySpark owns Delta Silver; these nodes are ephemeral (inlined), not second tables.
     silver:
-      +materialized: table      # Silver models = real Delta tables
-      +schema: silver           # Write to the silver schema in Unity Catalog
+      +materialized: ephemeral
     gold:
       +materialized: table      # Gold models = real Delta tables
       +schema: gold             # Write to the gold schema in Unity Catalog

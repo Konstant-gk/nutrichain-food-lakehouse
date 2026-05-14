@@ -37,7 +37,12 @@ with_keys AS (
             COALESCE(LOWER(silver.nutriscore_grade_reported), 'unknown'),
             256
         ) AS nutriscore_key,
+        {%- set _rd = var('run_date', none) %}
+        {%- if _rd is not none and _rd | string | trim != '' %}
+        DATE('{{ _rd }}') AS snapshot_date
+        {%- else %}
         CURRENT_DATE() AS snapshot_date
+        {%- endif %}
     FROM silver
 ),
 
