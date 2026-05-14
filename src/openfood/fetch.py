@@ -19,11 +19,18 @@ How to run manually:
 
 Prerequisites:
     No API key required. Open Food Facts is fully public.
-    OPENFOOD_MAX_PAGES env var (optional, defaults to 50).
+    Airflow DAG reads OPENFOOD_MAX_PAGES at task runtime (default 100 if unset/invalid).
+    When calling fetch_all_pages() from tests or CLI, pass max_pages explicitly; the
+    function parameter default is 50 if omitted.
+    OPENFOOD_USER_AGENT — set a descriptive app name + contact; bare defaults risk 403.
+    OPENFOOD_POLITE_DELAY_SECONDS — pause between successful pages (default 10.0 if unset).
+    OPENFOOD_PAGE_MAX_RETRIES — HTTP attempts per page for 429/5xx (default 10 if unset).
 """
 
 import json
 import logging
+import os
+import random
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,22 +39,69 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# Open Food Facts search API — returns products with all nutrition fields
-BASE_URL = "https://world.openfoodfacts.org/cgi/search.pl"
-PAGE_SIZE = 100
-POLITE_DELAY_SECONDS = 1.0  # Be polite to a free public API
+# Open Food Facts v2 search API
+# This is the stable modern endpoint — cgi/search.pl is the legacy one
+BASE_URL = "https://world.openfoodfacts.org/api/v2/search"
 
-# Only request the fields we actually need — keeps response size small
-# and avoids downloading 200 fields we will never use
+PAGE_SIZE = 10
+
+# Defaults when env is unset; long runs against OFF often need slower pacing + more retries.
+DEFAULT_POLITE_DELAY_SECONDS = 5
+DEFAULT_PAGE_MAX_RETRIES = 5
+
+# Status codes that mean "server is busy, try again later"
+# 429 = rate limited, 503 = temporarily unavailable, 502 = bad gateway
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+# OpenFood blocks anonymous library defaults;
+_DEFAULT_USER_AGENT = (
+    "NutriChainFoodLakehouse/1.0 "
+    "(set OPENFOOD_USER_AGENT in .env to your email or project URL)"
+)
+
+
+def _request_headers() -> dict[str, str]:
+    ua = (os.environ.get("OPENFOOD_USER_AGENT") or "").strip()
+    return {"User-Agent": ua if ua else _DEFAULT_USER_AGENT}
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+        if v <= 0:
+            return default
+        return v
+    except ValueError:
+        logger.warning("Invalid %s=%r; using %.2f", name, raw, default)
+        return default
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+        if v < 1:
+            return default
+        return v
+    except ValueError:
+        logger.warning("Invalid %s=%r; using %d", name, raw, default)
+        return default
+
+
 REQUESTED_FIELDS = ",".join([
-    "code",                      # barcode — our primary key
+    "code",
     "product_name",
     "brands",
     "categories",
     "countries",
     "quantity",
     "serving_size",
-    "energy_100g",               # may be kJ or kcal — we fix in Silver
+    "energy_100g",
     "energy-kcal_100g",
     "proteins_100g",
     "fat_100g",
@@ -63,96 +117,116 @@ REQUESTED_FIELDS = ",".join([
     "allergens",
     "packaging",
     "image_url",
-    "last_modified_t",           # Unix timestamp — tells us data freshness
-    "pnns_groups_1",             # Parent nutrition category (OFF system)
-    "pnns_groups_2",             # Sub nutrition category
+    "last_modified_t",
+    "pnns_groups_1",
+    "pnns_groups_2",
 ])
 
 
 def fetch_all_pages(
     output_dir: str,
     run_id: str,
-    max_pages: int = 50,
+    max_pages: int = 10,
 ) -> dict:
     """
     Fetch up to max_pages pages from Open Food Facts and save each as JSON.
 
-    Open Food Facts uses page= (1-indexed) + page_size= for pagination,
-    unlike openFDA which used skip=. We adapt accordingly.
-
-    Each saved file contains raw API results PLUS lineage metadata fields
-    (run_id, page_number, fetched_at) baked directly into the file so the
-    file is self-describing even if moved or renamed.
-
     Args:
         output_dir : Local folder where JSON files will be written.
-                     Created automatically if it does not exist.
-        run_id     : Unique string identifying this pipeline run.
-                     Format: "20250420" (YYYYMMDD from Airflow execution date).
-        max_pages  : Maximum number of pages to fetch in one run.
-                     Keeps cost and time bounded on free tier.
+        run_id     : Unique string identifying this pipeline run (YYYYMMDD).
+        max_pages  : Maximum pages to fetch. Keep small (3-5) for testing.
 
     Returns:
         dict: run_id, pages_fetched, records_total, output_dir.
-              Airflow XCom carries this to the upload task automatically.
 
     Raises:
-        requests.HTTPError : For non-retryable HTTP errors.
-        RuntimeError       : If max retries are exhausted on any page.
+        RuntimeError : If max retries are exhausted on any page.
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    polite_delay_s = _positive_float_env(
+        "OPENFOOD_POLITE_DELAY_SECONDS", DEFAULT_POLITE_DELAY_SECONDS
+    )
+    page_max_retries = _positive_int_env(
+        "OPENFOOD_PAGE_MAX_RETRIES", DEFAULT_PAGE_MAX_RETRIES
+    )
 
     pages_fetched = 0
     records_total = 0
 
     for page_num in range(1, max_pages + 1):
         params = {
-            "search_terms": "",          # empty = all products
+            "search_terms": "",
             "search_simple": 1,
             "action": "process",
             "json": 1,
             "page_size": PAGE_SIZE,
             "page": page_num,
             "fields": REQUESTED_FIELDS,
-            "sort_by": "last_modified_t",  # most recently updated first
+            "sort_by": "last_modified_t",
         }
 
-        max_retries = 4
+        max_retries = page_max_retries
         response = None
+        last_status = None
 
         for attempt in range(max_retries):
             try:
                 logger.info(
-                    "Fetching page %d/%d, attempt %d",
-                    page_num, max_pages, attempt + 1,
+                    "Fetching page %d/%d, attempt %d/%d",
+                    page_num, max_pages, attempt + 1, max_retries,
                 )
-                response = requests.get(BASE_URL, params=params, timeout=30)
+                response = requests.get(
+                    BASE_URL,
+                    params=params,
+                    headers=_request_headers(),
+                    timeout=30,
+                )
+                last_status = response.status_code
 
-                if response.status_code == 429:
-                    wait_s = 2 ** attempt
+                # ── KEY FIX: retry on ALL server-side errors, not just 429 ──
+                if response.status_code in RETRYABLE_STATUS_CODES:
+                    # Exponential backoff WITH jitter
+                    # Jitter = small random extra wait so multiple retries
+                    # don't all hit the server at exactly the same second
+                    base_wait = 2 ** attempt          # 1, 2, 4, 8, 16 seconds
+                    jitter = random.uniform(0, 3)   # random 0-3 extra seconds
+                    wait_s = base_wait + jitter
+
                     logger.warning(
-                        "Rate limited (429) on page %d. Waiting %ds.", page_num, wait_s
+                        "Retryable status %d on page %d (attempt %d/%d). "
+                        "Waiting %.1fs before retry.",
+                        response.status_code, page_num, attempt + 1, max_retries, wait_s,
                     )
                     time.sleep(wait_s)
-                    continue
+                    continue  # go to next attempt, do NOT call raise_for_status
 
+                # For non-retryable errors (400, 401, 403, 404) → crash immediately
                 response.raise_for_status()
-                break
+                break  # success — exit the retry loop
 
             except requests.exceptions.Timeout:
-                logger.error("Timeout on page %d, attempt %d", page_num, attempt + 1)
+                logger.error(
+                    "Timeout on page %d, attempt %d/%d",
+                    page_num, attempt + 1, max_retries,
+                )
                 if attempt == max_retries - 1:
                     raise RuntimeError(
                         f"Page {page_num} timed out after {max_retries} attempts."
                     )
-                time.sleep(2 ** attempt)
+                wait_s = 2 ** attempt + random.uniform(0, 1)
+                time.sleep(wait_s)
 
+        # ── After retry loop: check if we actually got a good response ────────
         if response is None:
             raise RuntimeError(f"No response received for page {page_num}.")
 
-        if response.status_code == 429:
+        if last_status in RETRYABLE_STATUS_CODES:
             raise RuntimeError(
-                f"Page {page_num} still rate-limited after {max_retries} attempts."
+                f"Page {page_num} still returning {last_status} after "
+                f"{max_retries} retries. The API may be down. "
+                f"Try again later, increase OPENFOOD_PAGE_MAX_RETRIES / "
+                f"OPENFOOD_POLITE_DELAY_SECONDS, or reduce OPENFOOD_MAX_PAGES."
             )
 
         data = response.json()
@@ -160,7 +234,7 @@ def fetch_all_pages(
 
         if not products:
             logger.info(
-                "Empty products list at page %d. Dataset exhausted. Stopping.",
+                "Empty products on page %d. Dataset exhausted. Stopping early.",
                 page_num,
             )
             break
@@ -171,7 +245,7 @@ def fetch_all_pages(
             "page_size": len(products),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "source_url": BASE_URL,
-            "total_products_reported": data.get("count", 0),  # OFF tells us total
+            "total_products_reported": data.get("count", 0),
             "products": products,
         }
 
@@ -179,17 +253,18 @@ def fetch_all_pages(
         filepath = Path(output_dir) / filename
 
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)  # ensure_ascii=False
-            # because product names contain accents, Chinese chars, Arabic, etc.
+            json.dump(payload, f, indent=2, ensure_ascii=False)
 
         pages_fetched += 1
         records_total += len(products)
 
         logger.info(
-            "Saved page %d → %s (%d products, total so far: %d)",
+            "✓ Saved page %d → %s (%d products, total so far: %d)",
             page_num, filename, len(products), records_total,
         )
-        time.sleep(POLITE_DELAY_SECONDS)
+
+        # Polite delay between pages — NEVER remove this for a free public API
+        time.sleep(polite_delay_s)
 
     summary = {
         "run_id": run_id,

@@ -5,7 +5,7 @@ Unit tests for src/openfood/fetch.py — NutriChain Retail Intelligence.
 
 We mock requests.get() so tests run instantly without network calls.
 Tests cover: happy path, empty response, metadata in files, multi-page,
-run_id in filenames, and API key inclusion.
+run_id in filenames, and User-Agent header wiring.
 """
 
 import json
@@ -15,9 +15,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.openfood.fetch import PAGE_SIZE, fetch_all_pages
+from src.openfood.fetch import PAGE_SIZE, _DEFAULT_USER_AGENT, fetch_all_pages
 
 
+@pytest.fixture(autouse=True)
+def _no_time_sleep(monkeypatch):
+    """Retries and polite delays use sleep; tests stay fast without real waits."""
+    monkeypatch.setattr("src.openfood.fetch.time.sleep", lambda *_args, **_kwargs: None)
 def make_fake_response(products: list, status_code: int = 200) -> MagicMock:
     """Build a fake requests.Response matching Open Food Facts API shape."""
     mock_response = MagicMock()
@@ -164,3 +168,36 @@ class TestFetchAllPages:
                 )
 
             assert summary["pages_fetched"] == 1
+
+    def test_opens_with_user_agent_from_env_when_set(self):
+        """OPENFOOD_USER_AGENT must be sent so OFF does not return 403."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("src.openfood.fetch.requests.get") as mock_get:
+                mock_get.side_effect = [
+                    make_fake_response([make_fake_product()]),
+                    make_fake_response([]),
+                ]
+                custom_ua = "NutriChainTest/1.0 (pytest)"
+                with patch.dict(os.environ, {"OPENFOOD_USER_AGENT": custom_ua}):
+                    fetch_all_pages(
+                        output_dir=tmp_dir, run_id="uatest", max_pages=5
+                    )
+
+                first = mock_get.call_args_list[0]
+                assert first.kwargs["headers"]["User-Agent"] == custom_ua
+
+    def test_opens_with_default_user_agent_when_env_unset(self):
+        """Without env, still send a non-library default User-Agent."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("src.openfood.fetch.requests.get") as mock_get:
+                mock_get.side_effect = [
+                    make_fake_response([make_fake_product()]),
+                    make_fake_response([]),
+                ]
+                with patch.dict(os.environ, {"OPENFOOD_USER_AGENT": ""}):
+                    fetch_all_pages(
+                        output_dir=tmp_dir, run_id="defaultua", max_pages=5
+                    )
+
+                ua = mock_get.call_args_list[0].kwargs["headers"]["User-Agent"]
+                assert ua == _DEFAULT_USER_AGENT
