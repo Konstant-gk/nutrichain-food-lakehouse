@@ -43,62 +43,38 @@ jobs:
             --cov-report=term-missing \
             -v
 
-  deploy:
-    name: Deploy notebooks to Databricks
+  # Delivery model A: Git syncs via Repos API (PATCH …/repos/{id} with branch) — same as clicking Pull on main.
+  # Jobs must use task paths under /Repos/... (not legacy workspace import).
+  databricks_delivery:
+    name: Sync Databricks Repo (main)
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/main'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Install Databricks CLI
-        run: pip install databricks-cli
-
-      - name: Configure Databricks CLI
+      - name: PATCH Repos to latest remote main
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_REPO_ID: ${{ secrets.DATABRICKS_REPO_ID }}
         run: |
-          cat > ~/.databrickscfg << EOF
-          [DEFAULT]
-          host  = ${DATABRICKS_HOST}
-          token = ${DATABRICKS_TOKEN}
-          EOF
-
-      - name: Deploy Bronze job script
-        run: |
-          databricks workspace import \
-            databricks/bronze/bronze_ingestion.py \
-            /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/bronze/bronze_ingestion \
-            --language PYTHON \
-            --overwrite
-
-      - name: Deploy Silver job script
-        run: |
-          databricks workspace import \
-            databricks/silver/silver_transform.py \
-            /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/silver/silver_transform \
-            --language PYTHON \
-            --overwrite
-
-      - name: Deploy Gold job script
-        run: |
-          databricks workspace import \
-            databricks/gold/gold_mart.py \
-            /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/gold/gold_mart \
-            --language PYTHON \
-            --overwrite
-
-      - name: Deployment summary
-        run: |
-          echo "✓ Deployment successful."
-          echo "Bronze : /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/bronze/bronze_ingestion"
-          echo "Silver : /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/silver/silver_transform"
-          echo "Gold   : /Users/kal.nata@outlook.com/nutrichain-food-lakehouse/databricks/gold/gold_mart"
+          set -euo pipefail
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_REPO_ID; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::Missing GitHub Actions secret: $v"
+              echo "Add DATABRICKS_REPO_ID (numeric id from GET /api/2.0/repos or the Repos UI URL)."
+              exit 1
+            fi
+          done
+          BASE_URL="${DATABRICKS_HOST%/}"
+          echo "Calling Repos update API (PATCH branch main)…"
+          code=$(curl -sS -o repo_sync_response.json -w "%{http_code}" -X PATCH \
+            "${BASE_URL}/api/2.0/repos/${DATABRICKS_REPO_ID}" \
+            -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"branch":"main"}')
+          echo "HTTP status: ${code}"
+          cat repo_sync_response.json
+          if [ "${code}" -lt 200 ] || [ "${code}" -ge 300 ]; then
+            exit 1
+          fi
+          echo "Databricks Repo is updated to latest commit on branch main."
