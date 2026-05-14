@@ -80,10 +80,16 @@ models:
         description: "FK to dim_brand.brand_key"
         tests:
           - not_null
+          - relationships:
+              to: ref('dim_brand')
+              field: brand_key
       - name: category_key
         description: "FK to dim_category.category_key"
         tests:
           - not_null
+          - relationships:
+              to: ref('dim_category')
+              field: category_key
       - name: snapshot_date
         description: "Date when this snapshot was taken (= Airflow run date)."
         tests:

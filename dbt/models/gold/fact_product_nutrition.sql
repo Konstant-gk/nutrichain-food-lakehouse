@@ -12,17 +12,32 @@ WITH silver AS (
 -- Step 1: Add foreign keys that match the dimension tables.
 -- OFF often has missing brands/categories; SHA2(NULL) is NULL and breaks not_null tests
 -- and star-schema joins. Coalesce to a sentinel before hashing (dims include same sentinel).
+-- CAST(... AS STRING) avoids edge cases where OFF columns are non-string in Delta; qualify
+-- with silver.* so computed keys never shadow an upstream column name.
 with_keys AS (
     SELECT
-        *,
-        SHA2(barcode, 256)              AS product_key,
-        SHA2(COALESCE(NULLIF(TRIM(primary_brand), ''), 'Unknown'), 256) AS brand_key,
-        SHA2(COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown'), 256) AS category_key,
-        SHA2(primary_country, 256)      AS country_key,
+        silver.*,
+        SHA2(silver.barcode, 256) AS product_key,
         SHA2(
-            COALESCE(LOWER(nutriscore_grade_reported), 'unknown'), 256
-        )                               AS nutriscore_key,
-        CURRENT_DATE()                  AS snapshot_date
+            COALESCE(
+                NULLIF(TRIM(CAST(silver.primary_brand AS STRING)), ''),
+                'Unknown'
+            ),
+            256
+        ) AS brand_key,
+        SHA2(
+            COALESCE(
+                NULLIF(TRIM(CAST(silver.primary_category AS STRING)), ''),
+                'Unknown'
+            ),
+            256
+        ) AS category_key,
+        SHA2(silver.primary_country, 256) AS country_key,
+        SHA2(
+            COALESCE(LOWER(silver.nutriscore_grade_reported), 'unknown'),
+            256
+        ) AS nutriscore_key,
+        CURRENT_DATE() AS snapshot_date
     FROM silver
 ),
 
@@ -34,31 +49,31 @@ with_category_benchmarks AS (
         *,
 
         -- Average nutrition per category (the benchmark every product is compared to)
-        ROUND(AVG(energy_kcal_per_100g)  OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
+        ROUND(AVG(energy_kcal_per_100g)  OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
             AS category_avg_kcal_100g,
 
-        ROUND(AVG(sugars_100g)  OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
+        ROUND(AVG(sugars_100g)  OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
             AS category_avg_sugar_100g,
 
-        ROUND(AVG(fat_100g)     OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
+        ROUND(AVG(fat_100g)     OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
             AS category_avg_fat_100g,
 
-        ROUND(AVG(salt_100g)    OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
+        ROUND(AVG(salt_100g)    OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
             AS category_avg_salt_100g,
 
-        ROUND(AVG(proteins_100g) OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
+        ROUND(AVG(proteins_100g) OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
             AS category_avg_protein_100g,
 
         -- Healthiness rank within category
         -- Rank 1 = healthiest (lowest nutriscore = better)
         -- Analysts use this to answer: "Is our product in the top 10% of its category?"
         RANK() OVER (
-            PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')
+            PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')
             ORDER BY nutriscore_score_raw ASC NULLS LAST
         ) AS healthiness_rank_in_category,
 
         -- Total products in category (for rank % calculation)
-        COUNT(*) OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown'))
+        COUNT(*) OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown'))
             AS category_product_count
 
     FROM with_keys
@@ -77,8 +92,8 @@ final AS (
 
         -- ── Degenerate dimensions (useful attributes kept on the fact) ─────
         barcode                         AS product_id,
-        COALESCE(NULLIF(TRIM(primary_brand), ''), 'Unknown')       AS brand_name,
-        COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown') AS category_name,
+        COALESCE(NULLIF(TRIM(CAST(primary_brand AS STRING)), ''), 'Unknown')       AS brand_name,
+        COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown') AS category_name,
         primary_country                 AS country_name,
 
         -- ── Nutrition measures per 100g ───────────────────────────────────

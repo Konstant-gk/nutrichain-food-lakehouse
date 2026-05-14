@@ -104,9 +104,12 @@ def main(args: argparse.Namespace) -> None:
     # ── DIMENSION: dim_brand ──────────────────────────────────────────────────
     # One row per unique brand name found across all products
     dim_brand_df = (
-        silver_df
-        .select(F.col("primary_brand").alias("brand_name"))
-        .filter(F.col("brand_name").isNotNull() & (F.length(F.col("brand_name")) > 0))
+        silver_df.select(
+            F.coalesce(
+                F.nullif(F.trim(F.col("primary_brand").cast("string")), F.lit("")),
+                F.lit("Unknown"),
+            ).alias("brand_name")
+        )
         .distinct()
         .withColumn("brand_id", F.sha2(F.col("brand_name"), 256))
         .withColumn("gold_built_at", F.current_timestamp())
@@ -116,10 +119,11 @@ def main(args: argparse.Namespace) -> None:
 
     # ── DIMENSION: dim_category ───────────────────────────────────────────────
     dim_category_df = (
-        silver_df
-        .select(F.col("primary_category").alias("category_name"))
-        .filter(
-            F.col("category_name").isNotNull() & (F.length(F.col("category_name")) > 0)
+        silver_df.select(
+            F.coalesce(
+                F.nullif(F.trim(F.col("primary_category").cast("string")), F.lit("")),
+                F.lit("Unknown"),
+            ).alias("category_name")
         )
         .distinct()
         .withColumn("category_id", F.sha2(F.col("category_name"), 256))
@@ -176,8 +180,22 @@ def main(args: argparse.Namespace) -> None:
     fact_base_df = (
         silver_df
         .withColumn("product_id", F.col("barcode"))
-        .withColumn("brand_id", F.sha2(F.col("primary_brand"), 256))
-        .withColumn("category_id", F.sha2(F.col("primary_category"), 256))
+        .withColumn(
+            "_norm_brand",
+            F.coalesce(
+                F.nullif(F.trim(F.col("primary_brand").cast("string")), F.lit("")),
+                F.lit("Unknown"),
+            ),
+        )
+        .withColumn(
+            "_norm_category",
+            F.coalesce(
+                F.nullif(F.trim(F.col("primary_category").cast("string")), F.lit("")),
+                F.lit("Unknown"),
+            ),
+        )
+        .withColumn("brand_id", F.sha2(F.col("_norm_brand"), 256))
+        .withColumn("category_id", F.sha2(F.col("_norm_category"), 256))
         .withColumn("country_id", F.sha2(F.col("primary_country"), 256))
         .withColumn("nutriscore_grade_key",
                     F.coalesce(F.lower(F.col("nutriscore_grade_reported")),
@@ -188,7 +206,7 @@ def main(args: argparse.Namespace) -> None:
     # Step B: Category-level benchmark averages
     # These tell analysts: "for THIS product's category, what is the avg sugar?"
     # Then the fact row carries both the product's actual value AND the category avg.
-    category_window = Window.partitionBy("primary_category")
+    category_window = Window.partitionBy("_norm_category")
 
     fact_df = (
         fact_base_df
@@ -237,7 +255,7 @@ def main(args: argparse.Namespace) -> None:
         .withColumn(
             "healthiness_rank_in_category",
             F.rank().over(
-                Window.partitionBy("primary_category")
+                Window.partitionBy("_norm_category")
                 .orderBy(F.col("nutriscore_score_raw").asc_nulls_last())
             ),
         )

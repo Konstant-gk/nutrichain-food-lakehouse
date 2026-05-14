@@ -3,7 +3,11 @@
 -- Purpose: Category dimension — one row per unique food category.
 
 WITH source AS (
-    SELECT DISTINCT COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown') AS category_name
+    SELECT DISTINCT
+        COALESCE(
+            NULLIF(TRIM(CAST(primary_category AS STRING)), ''),
+            'Unknown'
+        ) AS category_name
     FROM {{ ref('silver_openfood_products') }}
 ),
 
