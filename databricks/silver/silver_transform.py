@@ -41,6 +41,19 @@ from pyspark.sql.window import Window
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Parsed from bronze.raw_products_json. Only fields Silver uses; all STRING so
+# new OFF top-level keys and nested blobs (e.g. nutriments) do not break parsing.
+_RAW_PRODUCTS_SCHEMA = (
+    "array<struct<"
+    "code:string,product_name:string,brands:string,categories:string,countries:string,"
+    "quantity:string,serving_size:string,energy_100g:string,`energy-kcal_100g`:string,"
+    "proteins_100g:string,fat_100g:string,carbohydrates_100g:string,sugars_100g:string,"
+    "salt_100g:string,sodium_100g:string,fiber_100g:string,nutriscore_score:string,"
+    "nutriscore_grade:string,nova_group:string,ingredients_text:string,allergens:string,"
+    "packaging:string,last_modified_t:string"
+    ">>"
+)
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -95,19 +108,30 @@ def main(args: argparse.Namespace) -> None:
         )
     logger.info("Bronze page-rows for this run: %d", row_count)
 
-    # Explode: each page has N products → we get one row per product
+    # Parse page-level JSON saved in Bronze (stable string column — see bronze_ingestion).
+    bronze_df = bronze_df.withColumn(
+        "_products_array",
+        F.from_json(F.col("raw_products_json"), _RAW_PRODUCTS_SCHEMA),
+    )
+
+    # Explode: each page has N products → one row per product
     exploded_df = bronze_df.select(
-        F.explode(F.col("products")).alias("p"),
+        F.explode(F.col("_products_array")).alias("p"),
         F.col("ingest_run_id"),
         F.col("ingested_at"),
-    )
+    ).filter(F.col("p").isNotNull())
 
     product_count = exploded_df.count()
     logger.info("Products after explode: %d", product_count)
+    if product_count == 0:
+        raise RuntimeError(
+            "Zero product rows after parsing raw_products_json. "
+            "Check Volume JSON, to_json in Bronze, and that raw_products_json is non-null. "
+            "Very old Bronze rows without raw_products_json are not supported by this Silver job."
+        )
 
-    # ── Step 2: Extract flat columns from the nested product struct ───────────
+    # ── Step 2: Extract flat columns from each product struct (strings → typed casts)
     flat_df = exploded_df.select(
-        # Identity / keys
         F.col("p.code").alias("barcode"),
         F.col("p.product_name").alias("product_name"),
         F.col("p.brands").alias("brands_raw"),
@@ -115,7 +139,6 @@ def main(args: argparse.Namespace) -> None:
         F.col("p.countries").alias("countries_raw"),
         F.col("p.quantity").alias("quantity_raw"),
         F.col("p.serving_size").alias("serving_size_raw"),
-        # Nutrition — raw values (may be kJ, may be null, may be wrong)
         F.col("p.energy_100g").cast("double").alias("energy_raw_100g"),
         F.col("p.`energy-kcal_100g`").cast("double").alias("energy_kcal_raw_100g"),
         F.col("p.proteins_100g").cast("double").alias("proteins_100g"),
@@ -125,17 +148,13 @@ def main(args: argparse.Namespace) -> None:
         F.col("p.salt_100g").cast("double").alias("salt_100g"),
         F.col("p.sodium_100g").cast("double").alias("sodium_raw_100g"),
         F.col("p.fiber_100g").cast("double").alias("fiber_100g"),
-        # Scoring
         F.col("p.nutriscore_score").cast("int").alias("nutriscore_score_raw"),
         F.col("p.nutriscore_grade").alias("nutriscore_grade_reported"),
         F.col("p.nova_group").cast("int").alias("nova_group"),
-        # Text
         F.col("p.ingredients_text").alias("ingredients_text"),
         F.col("p.allergens").alias("allergens"),
         F.col("p.packaging").alias("packaging"),
-        # Timestamps
         F.col("p.last_modified_t").cast("long").alias("last_modified_unix"),
-        # Lineage
         F.col("ingest_run_id"),
         F.col("ingested_at"),
     )

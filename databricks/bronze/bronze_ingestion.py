@@ -78,10 +78,11 @@ def main(args: argparse.Namespace) -> None:
         )
     logger.info("Read %d page-level records from Volume.", row_count)
 
-    # Bronze adds lineage metadata columns and preserves the raw products array.
-    # We store products as raw JSON string — Silver will explode and parse it.
-    # This preserves maximum fidelity: even if our Silver logic has a bug,
-    # we can always re-derive from Bronze without re-fetching from the API.
+    # Bronze adds lineage metadata and one string column for all product payloads.
+    # Do NOT persist inferred struct/array column "products" on append: Open Food
+    # Facts evolves nested fields between pages/runs → Delta schema merge fails with
+    # DELTA_FAILED_TO_MERGE_FIELDS on "products". raw_products_json is stable (string).
+    # Silver parses this JSON with a fixed array<struct<...>> schema (see silver_transform).
     bronze_df = (
         raw_df
         .withColumn("ingest_run_id", F.lit(run_id))
@@ -95,10 +96,8 @@ def main(args: argparse.Namespace) -> None:
             "total_products_reported",
             F.col("total_products_reported").cast("long"),
         )
-        # Store products array as a raw JSON string for full fidelity
         .withColumn("raw_products_json", F.to_json(F.col("products")))
-        # Keep the structured products array too — makes Silver reads easier
-        .withColumn("products", F.col("products"))
+        .drop("products")
     )
 
     bronze_df.write.format("delta").mode("append").saveAsTable(bronze_table)
