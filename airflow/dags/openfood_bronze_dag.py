@@ -13,7 +13,7 @@ Task order:
     2. upload_to_volume        — uploads JSON to Databricks UC Volume
     3. trigger_bronze_job      — Volume JSON → Bronze Delta table
     4. trigger_silver_job      — Bronze Delta → Silver Delta (cleaned + enriched)
-    5. trigger_gold_job        — Silver Delta → Gold Star Schema tables
+    5. run_dbt_gold_models     — dbt builds Gold Delta (single owner; no PySpark gold job)
 
 WHY AIRFLOW DOES THE API FETCH (not Databricks):
     Databricks Free Edition restricts outbound internet from serverless compute.
@@ -64,15 +64,8 @@ def _max_pages_from_env() -> int:
 CATALOG = os.getenv("DATABRICKS_CATALOG", "nutrichain_lakehouse")
 BRONZE_SCHEMA = os.getenv("DATABRICKS_BRONZE_SCHEMA", "bronze")
 SILVER_SCHEMA = os.getenv("DATABRICKS_SILVER_SCHEMA", "silver")
-GOLD_SCHEMA = os.getenv("DATABRICKS_GOLD_SCHEMA", "gold")
 BRONZE_TABLE = os.getenv("DATABRICKS_BRONZE_TABLE", "bronze_openfood_products_raw")
 SILVER_TABLE = os.getenv("DATABRICKS_SILVER_TABLE", "silver_openfood_products")
-GOLD_FACT_TABLE = os.getenv("DATABRICKS_GOLD_FACT_TABLE", "fact_product_nutrition")
-GOLD_DIM_PRODUCT = os.getenv("DATABRICKS_GOLD_DIM_PRODUCT", "dim_product")
-GOLD_DIM_BRAND = os.getenv("DATABRICKS_GOLD_DIM_BRAND", "dim_brand")
-GOLD_DIM_CATEGORY = os.getenv("DATABRICKS_GOLD_DIM_CATEGORY", "dim_category")
-GOLD_DIM_COUNTRY = os.getenv("DATABRICKS_GOLD_DIM_COUNTRY", "dim_country")
-GOLD_DIM_NUTRISCORE = os.getenv("DATABRICKS_GOLD_DIM_NUTRISCORE", "dim_nutriscore")
 
 default_args = {
     "owner": "nutrichain_de_team",
@@ -171,33 +164,15 @@ with DAG(
         wait_for_termination=True,
     )
 
-    gold_job = DatabricksRunNowOperator(
-        task_id="trigger_gold_job",
-        databricks_conn_id="databricks_default",
-        job_id="{{ var.value.databricks_gold_job_id }}",
-        job_parameters={
-            "run_id": "{{ ds_nodash }}",
-            "catalog": CATALOG,
-            "silver_schema": SILVER_SCHEMA,
-            "gold_schema": GOLD_SCHEMA,
-            "silver_table": SILVER_TABLE,
-            "gold_fact_table": GOLD_FACT_TABLE,
-            "gold_dim_product": GOLD_DIM_PRODUCT,
-            "gold_dim_brand": GOLD_DIM_BRAND,
-            "gold_dim_category": GOLD_DIM_CATEGORY,
-            "gold_dim_country": GOLD_DIM_COUNTRY,
-            "gold_dim_nutriscore": GOLD_DIM_NUTRISCORE,
-        },
-        wait_for_termination=True,
-    )
-
     # dbt is installed in the Airflow image via requirements.txt (no separate venv).
     # ../dbt is mounted at /opt/airflow/dbt in docker-compose; profiles.yml uses env_var().
     dbt_run_task = BashOperator(
         task_id="run_dbt_gold_models",
         bash_command=(
             "cd /opt/airflow/dbt && "
-            "dbt run --profiles-dir /opt/airflow/dbt"
+            "dbt run --profiles-dir /opt/airflow/dbt "
+            "--select path:models/gold "
+            '--vars "{\"run_date\": \"{{ ds }}\"}"'
         ),
     )
 
@@ -210,4 +185,4 @@ with DAG(
     )
 
     # chain:
-    fetch_task >> upload_task >> bronze_job >> silver_job >> gold_job >> dbt_run_task >> dbt_test_task
+    fetch_task >> upload_task >> bronze_job >> silver_job >> dbt_run_task >> dbt_test_task

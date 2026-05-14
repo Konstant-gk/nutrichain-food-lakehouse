@@ -86,8 +86,10 @@ nutrichain-food-lakehouse/
 │   ├── dbt_project.yml
 │   └── models/
 │       ├── silver/
-│       │   └── silver_openfood_products.sql
+│       │   ├── sources.yml                 # UC Silver Delta (PySpark-owned)
+│       │   └── silver_openfood_products.sql  # ephemeral bridge → ref() in Gold
 │       └── gold/
+│           ├── dim_product.sql
 │           ├── fact_product_nutrition.sql
 │           ├── dim_brand.sql
 │           ├── dim_category.sql
@@ -96,8 +98,7 @@ nutrichain-food-lakehouse/
 │
 ├── databricks/
 │   ├── bronze/bronze_ingestion.py
-│   ├── silver/silver_transform.py
-│   └── gold/gold_mart.py
+│   └── silver/silver_transform.py        # Gold is built by dbt only (no PySpark gold job in repo)
 │
 ├── tests/
 │   ├── test_fetch.py
@@ -188,7 +189,7 @@ user: airflow / password: airflow
 ```
 
 ### 5. Trigger the pipeline
-Enable and trigger `openfood_bronze_dag` from the Airflow UI. The DAG will run Bronze ingestion → dbt Silver → dbt Gold automatically.
+Enable and trigger `nutrichain_openfood_daily` from the Airflow UI. The DAG runs Bronze and Silver on Databricks, then **dbt** builds Gold (`dbt run --select path:models/gold` with `run_date` = Airflow logical date).
 
 ---
 
