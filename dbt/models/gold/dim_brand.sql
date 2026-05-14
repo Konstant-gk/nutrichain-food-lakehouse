@@ -4,10 +4,8 @@
 -- Grain: one brand name = one row.
 
 WITH source AS (
-    SELECT DISTINCT primary_brand AS brand_name
+    SELECT DISTINCT COALESCE(NULLIF(TRIM(primary_brand), ''), 'Unknown') AS brand_name
     FROM {{ ref('silver_openfood_products') }}
-    WHERE primary_brand IS NOT NULL
-      AND LENGTH(TRIM(primary_brand)) > 0
 ),
 
 final AS (

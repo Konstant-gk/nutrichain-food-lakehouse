@@ -9,13 +9,15 @@ WITH silver AS (
     SELECT * FROM {{ ref('silver_openfood_products') }}
 ),
 
--- Step 1: Add foreign keys that match the dimension tables
+-- Step 1: Add foreign keys that match the dimension tables.
+-- OFF often has missing brands/categories; SHA2(NULL) is NULL and breaks not_null tests
+-- and star-schema joins. Coalesce to a sentinel before hashing (dims include same sentinel).
 with_keys AS (
     SELECT
         *,
         SHA2(barcode, 256)              AS product_key,
-        SHA2(primary_brand, 256)        AS brand_key,
-        SHA2(primary_category, 256)     AS category_key,
+        SHA2(COALESCE(NULLIF(TRIM(primary_brand), ''), 'Unknown'), 256) AS brand_key,
+        SHA2(COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown'), 256) AS category_key,
         SHA2(primary_country, 256)      AS country_key,
         SHA2(
             COALESCE(LOWER(nutriscore_grade_reported), 'unknown'), 256
@@ -32,31 +34,31 @@ with_category_benchmarks AS (
         *,
 
         -- Average nutrition per category (the benchmark every product is compared to)
-        ROUND(AVG(energy_kcal_per_100g)  OVER (PARTITION BY primary_category), 2)
+        ROUND(AVG(energy_kcal_per_100g)  OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
             AS category_avg_kcal_100g,
 
-        ROUND(AVG(sugars_100g)  OVER (PARTITION BY primary_category), 2)
+        ROUND(AVG(sugars_100g)  OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
             AS category_avg_sugar_100g,
 
-        ROUND(AVG(fat_100g)     OVER (PARTITION BY primary_category), 2)
+        ROUND(AVG(fat_100g)     OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
             AS category_avg_fat_100g,
 
-        ROUND(AVG(salt_100g)    OVER (PARTITION BY primary_category), 2)
+        ROUND(AVG(salt_100g)    OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
             AS category_avg_salt_100g,
 
-        ROUND(AVG(proteins_100g) OVER (PARTITION BY primary_category), 2)
+        ROUND(AVG(proteins_100g) OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')), 2)
             AS category_avg_protein_100g,
 
         -- Healthiness rank within category
         -- Rank 1 = healthiest (lowest nutriscore = better)
         -- Analysts use this to answer: "Is our product in the top 10% of its category?"
         RANK() OVER (
-            PARTITION BY primary_category
+            PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown')
             ORDER BY nutriscore_score_raw ASC NULLS LAST
         ) AS healthiness_rank_in_category,
 
         -- Total products in category (for rank % calculation)
-        COUNT(*) OVER (PARTITION BY primary_category)
+        COUNT(*) OVER (PARTITION BY COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown'))
             AS category_product_count
 
     FROM with_keys
@@ -75,8 +77,8 @@ final AS (
 
         -- ── Degenerate dimensions (useful attributes kept on the fact) ─────
         barcode                         AS product_id,
-        primary_brand                   AS brand_name,
-        primary_category                AS category_name,
+        COALESCE(NULLIF(TRIM(primary_brand), ''), 'Unknown')       AS brand_name,
+        COALESCE(NULLIF(TRIM(primary_category), ''), 'Unknown') AS category_name,
         primary_country                 AS country_name,
 
         -- ── Nutrition measures per 100g ───────────────────────────────────
