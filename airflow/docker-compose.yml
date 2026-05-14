@@ -57,23 +57,28 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
+    # OPENFOOD_* (including OPENFOOD_MAX_PAGES) come from env_file ../.env only.
+    # Avoid OPENFOOD_MAX_PAGES: ${OPENFOOD_MAX_PAGES} in environment: Compose
+    # host interpolation can be empty and override .env with a blank value.
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
       DATABRICKS_HOST:    ${DATABRICKS_HOST}
       DATABRICKS_TOKEN:   ${DATABRICKS_TOKEN}
-      OPENFOOD_MAX_PAGES: ${OPENFOOD_MAX_PAGES}
       PYTHONPATH: /opt/airflow/src
     volumes:
       - ./dags:/opt/airflow/dags      # Mount dags/ folder INTO the container.
       - ./logs:/opt/airflow/logs      # Mount logs/ folder INTO the container.
       - ../src:/opt/airflow/src        # Mount src/ folder INTO the container.
+      - ../dbt:/opt/airflow/dbt        # dbt project + profiles.yml for BashOperator tasks
     command: airflow scheduler
 
 
   # ── Web Server ───────────────────────────────────────────────────────────────
   airflow-webserver:
+    env_file:
+      - ../.env
     build:
       context: ..
       dockerfile: airflow/Dockerfile
@@ -85,18 +90,19 @@ services:
         condition: service_completed_successfully
     ports:
       - "8080:8080"
+    # Same OPENFOOD_* sourcing as scheduler (env_file ../.env).
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
       DATABRICKS_HOST:    ${DATABRICKS_HOST}
       DATABRICKS_TOKEN:   ${DATABRICKS_TOKEN}
-      OPENFOOD_MAX_PAGES: ${OPENFOOD_MAX_PAGES}
       PYTHONPATH: /opt/airflow/src
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ../src:/opt/airflow/src
+      - ../dbt:/opt/airflow/dbt
     command: airflow webserver 
 
 # ── Named volumes ─────────────────────────────────────────────────────────────

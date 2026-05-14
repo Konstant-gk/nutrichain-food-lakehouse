@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.databricks.operators.databricks import DatabricksRunNowOperator
+from airflow.operators.bash import BashOperator
 
 from openfood.fetch import fetch_all_pages
 from openfood.upload import upload_run_to_volume
@@ -38,7 +39,28 @@ from openfood.upload import upload_run_to_volume
 logger = logging.getLogger(__name__)
 
 LOCAL_OUTPUT_DIR = "/tmp/nutrichain_openfood"
-MAX_PAGES = int(os.getenv("OPENFOOD_MAX_PAGES", "100"))
+
+
+def _max_pages_from_env() -> int:
+    """
+    Read OPENFOOD_MAX_PAGES at task runtime (not at DAG import).
+
+    Avoids stale values after .env changes and treats empty / invalid like unset.
+    """
+    raw = (os.environ.get("OPENFOOD_MAX_PAGES") or "").strip()
+    if not raw:
+        return 10
+    try:
+        v = int(raw)
+        if v < 1:
+            logger.warning("OPENFOOD_MAX_PAGES=%r is invalid; using 10", raw)
+            return 10
+        return v
+    except ValueError:
+        logger.warning("OPENFOOD_MAX_PAGES=%r is not an integer; using 10", raw)
+        return 10
+
+
 CATALOG = os.getenv("DATABRICKS_CATALOG", "nutrichain_lakehouse")
 BRONZE_SCHEMA = os.getenv("DATABRICKS_BRONZE_SCHEMA", "bronze")
 SILVER_SCHEMA = os.getenv("DATABRICKS_SILVER_SCHEMA", "silver")
@@ -56,7 +78,7 @@ default_args = {
     "owner": "nutrichain_de_team",
     "depends_on_past": False,
     "retries": 2,
-    "retry_delay": timedelta(minutes=5),
+    "retry_delay": timedelta(seconds=30),
     "email_on_failure": False,
 }
 
@@ -67,12 +89,13 @@ def task_fetch(**context) -> dict:
     Returns summary dict → pushed to XCom automatically for Task 2 to read.
     """
     run_id = context["ds"].replace("-", "")  # "2025-04-20" → "20250420"
-    logger.info("Starting fetch for run_id=%s, max_pages=%d", run_id, MAX_PAGES)
+    max_pages = _max_pages_from_env()
+    logger.info("Starting fetch for run_id=%s, max_pages=%d", run_id, max_pages)
 
     metadata = fetch_all_pages(
         output_dir=f"{LOCAL_OUTPUT_DIR}/{run_id}",
         run_id=run_id,
-        max_pages=MAX_PAGES,
+        max_pages=max_pages,
     )
     logger.info("Fetch complete: %s", metadata)
     return metadata
@@ -168,4 +191,23 @@ with DAG(
         wait_for_termination=True,
     )
 
-    fetch_task >> upload_task >> bronze_job >> silver_job >> gold_job
+    # dbt is installed in the Airflow image via requirements.txt (no separate venv).
+    # ../dbt is mounted at /opt/airflow/dbt in docker-compose; profiles.yml uses env_var().
+    dbt_run_task = BashOperator(
+        task_id="run_dbt_gold_models",
+        bash_command=(
+            "cd /opt/airflow/dbt && "
+            "dbt run --profiles-dir /opt/airflow/dbt"
+        ),
+    )
+
+    dbt_test_task = BashOperator(
+        task_id="test_dbt_gold_models",
+        bash_command=(
+            "cd /opt/airflow/dbt && "
+            "dbt test --profiles-dir /opt/airflow/dbt"
+        ),
+    )
+
+    # chain:
+    fetch_task >> upload_task >> bronze_job >> silver_job >> gold_job >> dbt_run_task >> dbt_test_task
