@@ -19,12 +19,8 @@ How to run manually:
 
 Prerequisites:
     No API key required. Open Food Facts is fully public.
-    Airflow DAG reads OPENFOOD_MAX_PAGES at task runtime (default 100 if unset/invalid).
-    When calling fetch_all_pages() from tests or CLI, pass max_pages explicitly; the
-    function parameter default is 50 if omitted.
-    OPENFOOD_USER_AGENT — set a descriptive app name + contact; bare defaults risk 403.
-    OPENFOOD_POLITE_DELAY_SECONDS — pause between successful pages (default 10.0 if unset).
-    OPENFOOD_PAGE_MAX_RETRIES — HTTP attempts per page for 429/5xx (default 10 if unset).
+    Set OPENFOOD_* vars in .env (see env.example.txt): MAX_PAGES, RECORDS_PER_PAGE,
+    POLITE_DELAY_SECONDS, PAGE_MAX_RETRIES, USER_AGENT.
 """
 
 import json
@@ -37,17 +33,13 @@ from pathlib import Path
 
 import requests
 
+from .config import load_openfood_fetch_settings
+
 logger = logging.getLogger(__name__)
 
 # Open Food Facts v2 search API
 # This is the stable modern endpoint — cgi/search.pl is the legacy one
 BASE_URL = "https://world.openfoodfacts.org/api/v2/search"
-
-PAGE_SIZE = 10
-
-# Defaults when env is unset; long runs against OFF often need slower pacing + more retries.
-DEFAULT_POLITE_DELAY_SECONDS = 5
-DEFAULT_PAGE_MAX_RETRIES = 5
 
 # Status codes that mean "server is busy, try again later"
 # 429 = rate limited, 503 = temporarily unavailable, 502 = bad gateway
@@ -63,34 +55,6 @@ _DEFAULT_USER_AGENT = (
 def _request_headers() -> dict[str, str]:
     ua = (os.environ.get("OPENFOOD_USER_AGENT") or "").strip()
     return {"User-Agent": ua if ua else _DEFAULT_USER_AGENT}
-
-
-def _positive_float_env(name: str, default: float) -> float:
-    raw = (os.environ.get(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        v = float(raw)
-        if v <= 0:
-            return default
-        return v
-    except ValueError:
-        logger.warning("Invalid %s=%r; using %.2f", name, raw, default)
-        return default
-
-
-def _positive_int_env(name: str, default: int) -> int:
-    raw = (os.environ.get(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        v = int(raw)
-        if v < 1:
-            return default
-        return v
-    except ValueError:
-        logger.warning("Invalid %s=%r; using %d", name, raw, default)
-        return default
 
 
 REQUESTED_FIELDS = ",".join([
@@ -123,33 +87,28 @@ REQUESTED_FIELDS = ",".join([
 ])
 
 
-def fetch_all_pages(
-    output_dir: str,
-    run_id: str,
-    max_pages: int = 10,
-) -> dict:
+def fetch_all_pages(output_dir: str, run_id: str) -> dict:
     """
-    Fetch up to max_pages pages from Open Food Facts and save each as JSON.
+    Fetch up to OPENFOOD_MAX_PAGES pages from Open Food Facts and save each as JSON.
 
     Args:
         output_dir : Local folder where JSON files will be written.
         run_id     : Unique string identifying this pipeline run (YYYYMMDD).
-        max_pages  : Maximum pages to fetch. Keep small (3-5) for testing.
 
     Returns:
         dict: run_id, pages_fetched, records_total, output_dir.
 
     Raises:
+        OpenFoodConfigError : If required OPENFOOD_* env vars are missing or invalid.
         RuntimeError : If max retries are exhausted on any page.
     """
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    settings = load_openfood_fetch_settings()
+    max_pages = settings.max_pages
+    records_per_page = settings.records_per_page
+    polite_delay_s = settings.polite_delay_seconds
+    page_max_retries = settings.page_max_retries
 
-    polite_delay_s = _positive_float_env(
-        "OPENFOOD_POLITE_DELAY_SECONDS", DEFAULT_POLITE_DELAY_SECONDS
-    )
-    page_max_retries = _positive_int_env(
-        "OPENFOOD_PAGE_MAX_RETRIES", DEFAULT_PAGE_MAX_RETRIES
-    )
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     pages_fetched = 0
     records_total = 0
@@ -160,7 +119,7 @@ def fetch_all_pages(
             "search_simple": 1,
             "action": "process",
             "json": 1,
-            "page_size": PAGE_SIZE,
+            "page_size": records_per_page,
             "page": page_num,
             "fields": REQUESTED_FIELDS,
             "sort_by": "last_modified_t",

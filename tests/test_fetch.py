@@ -15,21 +15,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.openfood.fetch import PAGE_SIZE, _DEFAULT_USER_AGENT, fetch_all_pages
+from src.openfood.config import load_openfood_fetch_settings
+from src.openfood.fetch import _DEFAULT_USER_AGENT, fetch_all_pages
 
 
 @pytest.fixture(autouse=True)
 def _no_time_sleep(monkeypatch):
     """Retries and polite delays use sleep; tests stay fast without real waits."""
     monkeypatch.setattr("src.openfood.fetch.time.sleep", lambda *_args, **_kwargs: None)
+
+
 def make_fake_response(products: list, status_code: int = 200) -> MagicMock:
     """Build a fake requests.Response matching Open Food Facts API shape."""
+    page_size = load_openfood_fetch_settings().records_per_page
     mock_response = MagicMock()
     mock_response.status_code = status_code
     mock_response.json.return_value = {
         "count": len(products),
         "page": 1,
-        "page_size": PAGE_SIZE,
+        "page_size": page_size,
         "products": products,
     }
     if status_code >= 400:
@@ -75,9 +79,7 @@ class TestFetchAllPages:
                     make_fake_response(fake_products),
                     make_fake_response([]),  # page 2: empty → stop
                 ]
-                summary = fetch_all_pages(
-                    output_dir=tmp_dir, run_id="20250420", max_pages=5
-                )
+                summary = fetch_all_pages(output_dir=tmp_dir, run_id="20250420")
 
             files = os.listdir(tmp_dir)
             assert len(files) == 1
@@ -93,7 +95,7 @@ class TestFetchAllPages:
                     make_fake_response([make_fake_product("222")]),
                     make_fake_response([]),
                 ]
-                fetch_all_pages(output_dir=tmp_dir, run_id="metarun", max_pages=5)
+                fetch_all_pages(output_dir=tmp_dir, run_id="metarun")
 
             saved_file = sorted(os.listdir(tmp_dir))[0]
             with open(os.path.join(tmp_dir, saved_file), encoding="utf-8") as f:
@@ -111,9 +113,7 @@ class TestFetchAllPages:
         with tempfile.TemporaryDirectory() as tmp_dir:
             with patch("src.openfood.fetch.requests.get") as mock_get:
                 mock_get.return_value = make_fake_response([])
-                summary = fetch_all_pages(
-                    output_dir=tmp_dir, run_id="emptyrun", max_pages=10
-                )
+                summary = fetch_all_pages(output_dir=tmp_dir, run_id="emptyrun")
 
             assert summary["pages_fetched"] == 0
             assert summary["records_total"] == 0
@@ -127,31 +127,29 @@ class TestFetchAllPages:
                     make_fake_response([make_fake_product()]),
                     make_fake_response([]),
                 ]
-                fetch_all_pages(
-                    output_dir=tmp_dir, run_id="uniquerun999", max_pages=5
-                )
+                fetch_all_pages(output_dir=tmp_dir, run_id="uniquerun999")
 
             filenames = os.listdir(tmp_dir)
             assert "uniquerun999" in filenames[0]
 
     def test_fetches_multiple_pages(self):
-        """max_pages=3 with full pages → 3 files, correct record count."""
-        fake_page = [make_fake_product(f"prod_{i}") for i in range(PAGE_SIZE)]
+        """OPENFOOD_MAX_PAGES=3 with full pages → 3 files, correct record count."""
+        records_per_page = load_openfood_fetch_settings().records_per_page
+        fake_page = [make_fake_product(f"prod_{i}") for i in range(records_per_page)]
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            with patch("src.openfood.fetch.requests.get") as mock_get:
-                mock_get.side_effect = [
-                    make_fake_response(fake_page),
-                    make_fake_response(fake_page),
-                    make_fake_response(fake_page),
-                ]
-                summary = fetch_all_pages(
-                    output_dir=tmp_dir, run_id="multipage", max_pages=3
-                )
+        with patch.dict(os.environ, {"OPENFOOD_MAX_PAGES": "3"}):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch("src.openfood.fetch.requests.get") as mock_get:
+                    mock_get.side_effect = [
+                        make_fake_response(fake_page),
+                        make_fake_response(fake_page),
+                        make_fake_response(fake_page),
+                    ]
+                    summary = fetch_all_pages(output_dir=tmp_dir, run_id="multipage")
 
-            assert summary["pages_fetched"] == 3
-            assert summary["records_total"] == PAGE_SIZE * 3
-            assert len(os.listdir(tmp_dir)) == 3
+                assert summary["pages_fetched"] == 3
+                assert summary["records_total"] == records_per_page * 3
+                assert len(os.listdir(tmp_dir)) == 3
 
     def test_rate_limit_retries(self):
         """429 on first attempt should retry and succeed on second attempt."""
@@ -163,41 +161,35 @@ class TestFetchAllPages:
                 empty = make_fake_response([])
                 mock_get.side_effect = [rate_limited, success, empty]
 
-                summary = fetch_all_pages(
-                    output_dir=tmp_dir, run_id="retrytest", max_pages=5
-                )
+                summary = fetch_all_pages(output_dir=tmp_dir, run_id="retrytest")
 
             assert summary["pages_fetched"] == 1
 
     def test_opens_with_user_agent_from_env_when_set(self):
         """OPENFOOD_USER_AGENT must be sent so OFF does not return 403."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            with patch("src.openfood.fetch.requests.get") as mock_get:
-                mock_get.side_effect = [
-                    make_fake_response([make_fake_product()]),
-                    make_fake_response([]),
-                ]
-                custom_ua = "NutriChainTest/1.0 (pytest)"
-                with patch.dict(os.environ, {"OPENFOOD_USER_AGENT": custom_ua}):
-                    fetch_all_pages(
-                        output_dir=tmp_dir, run_id="uatest", max_pages=5
-                    )
+        custom_ua = "NutriChainCustom/1.0 (pytest-override)"
+        with patch.dict(os.environ, {"OPENFOOD_USER_AGENT": custom_ua}):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch("src.openfood.fetch.requests.get") as mock_get:
+                    mock_get.side_effect = [
+                        make_fake_response([make_fake_product()]),
+                        make_fake_response([]),
+                    ]
+                    fetch_all_pages(output_dir=tmp_dir, run_id="uatest")
 
                 first = mock_get.call_args_list[0]
                 assert first.kwargs["headers"]["User-Agent"] == custom_ua
 
     def test_opens_with_default_user_agent_when_env_unset(self):
         """Without env, still send a non-library default User-Agent."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            with patch("src.openfood.fetch.requests.get") as mock_get:
-                mock_get.side_effect = [
-                    make_fake_response([make_fake_product()]),
-                    make_fake_response([]),
-                ]
-                with patch.dict(os.environ, {"OPENFOOD_USER_AGENT": ""}):
-                    fetch_all_pages(
-                        output_dir=tmp_dir, run_id="defaultua", max_pages=5
-                    )
+        with patch.dict(os.environ, {"OPENFOOD_USER_AGENT": ""}):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch("src.openfood.fetch.requests.get") as mock_get:
+                    mock_get.side_effect = [
+                        make_fake_response([make_fake_product()]),
+                        make_fake_response([]),
+                    ]
+                    fetch_all_pages(output_dir=tmp_dir, run_id="defaultua")
 
                 ua = mock_get.call_args_list[0].kwargs["headers"]["User-Agent"]
                 assert ua == _DEFAULT_USER_AGENT
