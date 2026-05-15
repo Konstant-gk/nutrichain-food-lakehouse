@@ -191,6 +191,40 @@ user: airflow / password: airflow
 ### 5. Trigger the pipeline
 Enable and trigger `nutrichain_openfood_daily` from the Airflow UI. The DAG runs Bronze and Silver on Databricks, then **dbt** builds Gold (`dbt run --select path:models/gold` with `run_date` = Airflow logical date).
 
+### dbt logs, docs, and repo `docs/`
+
+Full command and mental-model guide: [docs/explanation/dbt-cheatsheet-guide.md](docs/explanation/dbt-cheatsheet-guide.md).
+
+| Path | What it is |
+|------|------------|
+| `docs/` (repo root) | Human-written project docs (plans, guides) — **not** the dbt docs website |
+| `dbt/logs/dbt.log` | dbt CLI run log (only location after `log-path` in `dbt_project.yml`) |
+| `dbt/target/` | Compiled SQL, `manifest.json`, `catalog.json` — inputs for the docs site |
+| `airflow/logs/` | Airflow task/scheduler logs (DAG runs), gitignored |
+
+`dbt docs generate` does **not** open a browser; it writes `dbt/target/manifest.json` and `dbt/target/catalog.json`. View lineage in a browser (use port **8081** so Airflow can keep **8080**):
+
+**PowerShell (load root `.env` — dbt has no `--env-file` flag):**
+
+```powershell
+cd dbt
+Get-Content ..\.env | ForEach-Object {
+  if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
+  $n, $v = $_ -split '=', 2
+  Set-Item -Path "env:$($n.Trim())" -Value $v.Trim()
+}
+dbt docs generate --profiles-dir .
+dbt docs serve --profiles-dir . --port 8081
+```
+
+Open `http://localhost:8081`. Use **`dbt-core==1.8.8`** from `requirements.txt` in your venv — not **dbt Fusion** (CLI 2.x), which drops some commands.
+
+After generate inside Docker (`/opt/airflow/dbt`), the same files appear on disk at `dbt/target/` because `../dbt` is bind-mounted.
+
+Always run dbt from the **`dbt/`** directory. Never run dbt from `airflow/` (that creates `airflow/logs/dbt.log` and wrong `dbt_project.yml` paths).
+
+**Test artifacts at repo root:** `.pytest_cache/` and `.coverage` are created by `pytest`; they are gitignored and safe to delete anytime (they come back on the next test run).
+
 ---
 
 ## ✅ What "Success" Looks Like
