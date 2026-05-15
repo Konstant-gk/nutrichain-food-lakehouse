@@ -33,6 +33,7 @@ from airflow.operators.python import PythonOperator
 from airflow.providers.databricks.operators.databricks import DatabricksRunNowOperator
 from airflow.operators.bash import BashOperator
 
+from openfood.config import load_airflow_task_defaults, load_openfood_fetch_settings
 from openfood.fetch import fetch_all_pages
 from openfood.upload import upload_run_to_volume
 
@@ -40,38 +41,18 @@ logger = logging.getLogger(__name__)
 
 LOCAL_OUTPUT_DIR = "/tmp/nutrichain_openfood"
 
-
-def _max_pages_from_env() -> int:
-    """
-    Read OPENFOOD_MAX_PAGES at task runtime (not at DAG import).
-
-    Avoids stale values after .env changes and treats empty / invalid like unset.
-    """
-    raw = (os.environ.get("OPENFOOD_MAX_PAGES") or "").strip()
-    if not raw:
-        return 10
-    try:
-        v = int(raw)
-        if v < 1:
-            logger.warning("OPENFOOD_MAX_PAGES=%r is invalid; using 10", raw)
-            return 10
-        return v
-    except ValueError:
-        logger.warning("OPENFOOD_MAX_PAGES=%r is not an integer; using 10", raw)
-        return 10
-
-
 CATALOG = os.getenv("DATABRICKS_CATALOG", "nutrichain_lakehouse")
 BRONZE_SCHEMA = os.getenv("DATABRICKS_BRONZE_SCHEMA", "bronze")
 SILVER_SCHEMA = os.getenv("DATABRICKS_SILVER_SCHEMA", "silver")
 BRONZE_TABLE = os.getenv("DATABRICKS_BRONZE_TABLE", "bronze_openfood_products_raw")
 SILVER_TABLE = os.getenv("DATABRICKS_SILVER_TABLE", "silver_openfood_products")
 
+_airflow_defaults = load_airflow_task_defaults()
 default_args = {
     "owner": "nutrichain_de_team",
     "depends_on_past": False,
-    "retries": 2,
-    "retry_delay": timedelta(seconds=30),
+    "retries": _airflow_defaults.retries,
+    "retry_delay": timedelta(seconds=_airflow_defaults.retry_delay_seconds),
     "email_on_failure": False,
 }
 
@@ -82,13 +63,17 @@ def task_fetch(**context) -> dict:
     Returns summary dict → pushed to XCom automatically for Task 2 to read.
     """
     run_id = context["ds"].replace("-", "")  # "2025-04-20" → "20250420"
-    max_pages = _max_pages_from_env()
-    logger.info("Starting fetch for run_id=%s, max_pages=%d", run_id, max_pages)
+    fetch_settings = load_openfood_fetch_settings()
+    logger.info(
+        "Starting fetch for run_id=%s, max_pages=%d, records_per_page=%d",
+        run_id,
+        fetch_settings.max_pages,
+        fetch_settings.records_per_page,
+    )
 
     metadata = fetch_all_pages(
         output_dir=f"{LOCAL_OUTPUT_DIR}/{run_id}",
         run_id=run_id,
-        max_pages=max_pages,
     )
     logger.info("Fetch complete: %s", metadata)
     return metadata
