@@ -170,6 +170,7 @@ with DAG(
         task_id="run_dbt_gold_models",
         bash_command=(
             "cd /opt/airflow/dbt && "
+            "dbt seed --profiles-dir /opt/airflow/dbt && "
             "dbt run --profiles-dir /opt/airflow/dbt "
             "--select path:models/gold "
             '--vars "{\"run_date\": \"{{ ds }}\"}"'
@@ -180,7 +181,8 @@ with DAG(
         task_id="test_dbt_gold_models",
         bash_command=(
             "cd /opt/airflow/dbt && "
-            "dbt test --profiles-dir /opt/airflow/dbt"
+            "dbt test --profiles-dir /opt/airflow/dbt "
+            "--select path:models/gold"
         ),
     )
 
