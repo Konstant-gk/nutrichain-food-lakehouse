@@ -20,10 +20,19 @@ databricks/JOB_PARAMETER_SETUP.md
 /tmp/
 *.json
 
-# Airflow logs and local database
-airflow/logs
+# Airflow runtime (task/scheduler logs — not dbt)
+airflow/logs/
 airflow/airflow.db
 airflow/*.pid
+
+# dbt runtime (single place: dbt/logs + dbt/target; never repo root /logs)
+dbt/profiles.yml
+dbt/.user.yml
+dbt/logs/
+dbt/target/
+
+# Accidental dbt CLI output when run outside dbt/ (wrong working directory)
+/logs/
 
 # Virtual environment
 venv/
@@ -35,15 +44,6 @@ env/
 .idea/
 .vscode/
 *.swp
-dbt/profiles.yml
-dbt/.user.yml
-dbt/logs/
-dbt/target/
-# Local query/debug artifacts only — do not use bare *.sql (would ignore dbt/models).
-logs/*.log
-logs/*.sql
-dbt/logs/*.log
-dbt/logs/*.sql
 
 # Accidental nested checkout (duplicate repo folder under project root)
 /nutrichain-food-lakehouse/
