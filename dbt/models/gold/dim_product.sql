@@ -5,9 +5,8 @@
 -- Used by: fact_product_nutrition (joined on product_id = barcode)
 
 WITH source AS (
-    -- ref() tells dbt: "run silver_openfood_products model first, then this"
-    -- dbt builds the dependency graph automatically from ref() calls
-    SELECT * FROM {{ ref('silver_openfood_products') }}
+    -- source(): PySpark owns the Silver Delta table; declared in models/silver/sources.yml
+    SELECT * FROM {{ source('silver', 'silver_openfood_products') }}
 ),
 
 deduped AS (

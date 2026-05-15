@@ -8,7 +8,7 @@ WITH source AS (
             NULLIF(TRIM(CAST(primary_category AS STRING)), ''),
             'Unknown'
         ) AS category_name
-    FROM {{ ref('silver_openfood_products') }}
+    FROM {{ source('silver', 'silver_openfood_products') }}
 ),
 
 final AS (

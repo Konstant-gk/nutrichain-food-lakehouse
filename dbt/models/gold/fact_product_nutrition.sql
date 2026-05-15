@@ -6,7 +6,7 @@
 -- FK links : product_key, brand_key, category_key, country_key, nutriscore_key
 
 WITH silver AS (
-    SELECT * FROM {{ ref('silver_openfood_products') }}
+    SELECT * FROM {{ source('silver', 'silver_openfood_products') }}
 ),
 
 -- Step 1: Add foreign keys that match the dimension tables.

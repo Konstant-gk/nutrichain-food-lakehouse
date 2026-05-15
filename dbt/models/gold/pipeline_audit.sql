@@ -11,7 +11,7 @@
 --   "Is data freshness improving or degrading?"
 
 WITH silver AS (
-    SELECT * FROM {{ ref('silver_openfood_products') }}
+    SELECT * FROM {{ source('silver', 'silver_openfood_products') }}
 ),
 
 audit AS (

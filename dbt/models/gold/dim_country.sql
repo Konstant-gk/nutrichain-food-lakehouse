@@ -4,7 +4,7 @@
 
 WITH source AS (
     SELECT DISTINCT primary_country AS country_name
-    FROM {{ ref('silver_openfood_products') }}
+    FROM {{ source('silver', 'silver_openfood_products') }}
     WHERE primary_country IS NOT NULL
       AND LENGTH(TRIM(primary_country)) > 0
 ),

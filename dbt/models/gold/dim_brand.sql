@@ -9,7 +9,7 @@ WITH source AS (
             NULLIF(TRIM(CAST(primary_brand AS STRING)), ''),
             'Unknown'
         ) AS brand_name
-    FROM {{ ref('silver_openfood_products') }}
+    FROM {{ source('silver', 'silver_openfood_products') }}
 ),
 
 final AS (

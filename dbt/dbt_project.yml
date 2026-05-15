@@ -18,10 +18,21 @@ seed-paths: ["seeds"]           # CSVs that dbt can load as tables
 analysis-paths: ["analyses"]
 macro-paths: ["macros"]
 
-# Where dbt stores compiled SQL and run results (never commit this)
+# Runtime artifacts — always under this folder (never commit; see .gitignore)
 target-path: "target"
+log-path: "logs"
 clean-targets:
   - "target"
+  - "logs"
+
+# Static reference CSVs (e.g. Nutri-Score bands) — same gold schema as mart models
+seeds:
+  nutrichain_dbt:
+    +schema: gold
+
+# Include parent models when running tests on a path (orphan static dims + their tests)
+flags:
+  indirect_selection: eager
 
 # Model configuration — defines how each model is materialized
 # materialized: table  → dbt creates a real Delta table
