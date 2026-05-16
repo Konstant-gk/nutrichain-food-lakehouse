@@ -34,6 +34,7 @@ from pathlib import Path
 import requests
 
 from .config import load_openfood_fetch_settings
+from .pagination import load_next_page_start, save_next_page_start
 
 logger = logging.getLogger(__name__)
 
@@ -87,16 +88,28 @@ REQUESTED_FIELDS = ",".join([
 ])
 
 
-def fetch_all_pages(output_dir: str, run_id: str) -> dict:
+def fetch_all_pages(
+    output_dir: str,
+    run_id: str,
+    *,
+    page_start: int | None = None,
+) -> dict:
     """
-    Fetch up to OPENFOOD_MAX_PAGES pages from Open Food Facts and save each as JSON.
+    Fetch up to OPENFOOD_MAX_PAGES API pages from Open Food Facts and save each as JSON.
+
+    Pagination: by default reads ``next_page_start`` from pagination state and advances
+    it after the run so each batch pulls a new slice of the catalog (not pages 1..N
+    every time).
 
     Args:
         output_dir : Local folder where JSON files will be written.
-        run_id     : Unique string identifying this pipeline run (YYYYMMDD).
+        run_id     : Unique batch id (e.g. YYYYMMDD_HH00).
+        page_start : Optional override for API page number (1-based). If omitted, uses
+                     persisted state from OPENFOOD_PAGINATION_STATE_PATH.
 
     Returns:
-        dict: run_id, pages_fetched, records_total, output_dir.
+        dict: run_id, run_date, pages_fetched, records_total, output_dir, page_start,
+              page_end, next_page_start.
 
     Raises:
         OpenFoodConfigError : If required OPENFOOD_* env vars are missing or invalid.
@@ -108,19 +121,27 @@ def fetch_all_pages(output_dir: str, run_id: str) -> dict:
     polite_delay_s = settings.polite_delay_seconds
     page_max_retries = settings.page_max_retries
 
+    if page_start is None:
+        page_start = load_next_page_start()
+    else:
+        page_start = max(1, int(page_start))
+
+    page_end = page_start + max_pages - 1
+
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     pages_fetched = 0
     records_total = 0
+    last_api_page = page_start - 1
 
-    for page_num in range(1, max_pages + 1):
+    for api_page in range(page_start, page_end + 1):
         params = {
             "search_terms": "",
             "search_simple": 1,
             "action": "process",
             "json": 1,
             "page_size": records_per_page,
-            "page": page_num,
+            "page": api_page,
             "fields": REQUESTED_FIELDS,
             "sort_by": "last_modified_t",
         }
@@ -132,8 +153,12 @@ def fetch_all_pages(output_dir: str, run_id: str) -> dict:
         for attempt in range(max_retries):
             try:
                 logger.info(
-                    "Fetching page %d/%d, attempt %d/%d",
-                    page_num, max_pages, attempt + 1, max_retries,
+                    "Fetching API page %d (batch slot %d/%d), attempt %d/%d",
+                    api_page,
+                    pages_fetched + 1,
+                    max_pages,
+                    attempt + 1,
+                    max_retries,
                 )
                 response = requests.get(
                     BASE_URL,
@@ -155,7 +180,7 @@ def fetch_all_pages(output_dir: str, run_id: str) -> dict:
                     logger.warning(
                         "Retryable status %d on page %d (attempt %d/%d). "
                         "Waiting %.1fs before retry.",
-                        response.status_code, page_num, attempt + 1, max_retries, wait_s,
+                        response.status_code, api_page, attempt + 1, max_retries, wait_s,
                     )
                     time.sleep(wait_s)
                     continue  # go to next attempt, do NOT call raise_for_status
@@ -166,23 +191,23 @@ def fetch_all_pages(output_dir: str, run_id: str) -> dict:
 
             except requests.exceptions.Timeout:
                 logger.error(
-                    "Timeout on page %d, attempt %d/%d",
-                    page_num, attempt + 1, max_retries,
+                    "Timeout on API page %d, attempt %d/%d",
+                    api_page, attempt + 1, max_retries,
                 )
                 if attempt == max_retries - 1:
                     raise RuntimeError(
-                        f"Page {page_num} timed out after {max_retries} attempts."
+                        f"API page {api_page} timed out after {max_retries} attempts."
                     )
                 wait_s = 2 ** attempt + random.uniform(0, 1)
                 time.sleep(wait_s)
 
         # ── After retry loop: check if we actually got a good response ────────
         if response is None:
-            raise RuntimeError(f"No response received for page {page_num}.")
+            raise RuntimeError(f"No response received for API page {api_page}.")
 
         if last_status in RETRYABLE_STATUS_CODES:
             raise RuntimeError(
-                f"Page {page_num} still returning {last_status} after "
+                f"API page {api_page} still returning {last_status} after "
                 f"{max_retries} retries. The API may be down. "
                 f"Try again later, increase OPENFOOD_PAGE_MAX_RETRIES / "
                 f"OPENFOOD_POLITE_DELAY_SECONDS, or reduce OPENFOOD_MAX_PAGES."
@@ -193,14 +218,15 @@ def fetch_all_pages(output_dir: str, run_id: str) -> dict:
 
         if not products:
             logger.info(
-                "Empty products on page %d. Dataset exhausted. Stopping early.",
-                page_num,
+                "Empty products on API page %d. Dataset exhausted. Stopping early.",
+                api_page,
             )
             break
 
         payload = {
             "ingest_run_id": run_id,
-            "page_number": page_num,
+            "api_page_number": api_page,
+            "page_number": api_page,
             "page_size": len(products),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "source_url": BASE_URL,
@@ -208,7 +234,7 @@ def fetch_all_pages(output_dir: str, run_id: str) -> dict:
             "products": products,
         }
 
-        filename = f"run_{run_id}_page_{page_num:04d}.json"
+        filename = f"run_{run_id}_page_{api_page:06d}.json"
         filepath = Path(output_dir) / filename
 
         with open(filepath, "w", encoding="utf-8") as f:
@@ -216,20 +242,38 @@ def fetch_all_pages(output_dir: str, run_id: str) -> dict:
 
         pages_fetched += 1
         records_total += len(products)
+        last_api_page = api_page
 
         logger.info(
-            "✓ Saved page %d → %s (%d products, total so far: %d)",
-            page_num, filename, len(products), records_total,
+            "✓ Saved API page %d → %s (%d products, total so far: %d)",
+            api_page, filename, len(products), records_total,
         )
 
         # Polite delay between pages — NEVER remove this for a free public API
         time.sleep(polite_delay_s)
 
+    if pages_fetched == 0:
+        next_page_start = 1
+        logger.info(
+            "No products fetched (exhausted at page %d). Resetting pagination to page 1.",
+            page_start,
+        )
+    else:
+        next_page_start = last_api_page + 1
+
+    save_next_page_start(next_page_start)
+
+    run_date = run_id[:8] if len(run_id) >= 8 and run_id[:8].isdigit() else run_id
+
     summary = {
         "run_id": run_id,
+        "run_date": run_date,
         "pages_fetched": pages_fetched,
         "records_total": records_total,
         "output_dir": output_dir,
+        "page_start": page_start,
+        "page_end": last_api_page if pages_fetched else None,
+        "next_page_start": next_page_start,
     }
     logger.info("Fetch complete: %s", summary)
     return summary

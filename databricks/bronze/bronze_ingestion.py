@@ -32,9 +32,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Bronze ingestion: Open Food Facts JSON on Volume → Delta table."
     )
     p.add_argument(
+        "--run_date",
+        required=True,
+        help="Calendar date folder on Volume (yyyymmdd).",
+    )
+    p.add_argument(
         "--run_id",
         required=True,
-        help="Ingestion run id (yyyymmdd). Must match Volume subfolder name.",
+        help="Batch id (yyyymmdd_HH00). Must match Volume subfolder name.",
     )
     p.add_argument("--catalog", default="nutrichain_lakehouse")
     p.add_argument("--schema", default="bronze")
@@ -43,10 +48,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace) -> None:
+    run_date = args.run_date.strip()
     run_id = args.run_id.strip()
-    if not run_id:
+    if not run_date or not run_id:
         print(
-            "run_id is empty. Pass it via Airflow job_parameters.",
+            "run_date and run_id are required. Pass them via Airflow job_parameters.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -56,12 +62,14 @@ def main(args: argparse.Namespace) -> None:
     table = args.table.strip()
 
     bronze_table = f"{catalog}.{schema}.{table}"
-    # Volume path must match what upload.py wrote to
-    volume_input = f"/Volumes/{catalog}/{schema}/raw_json_landing/{run_id}/"
+    # Volume path must match what upload.py wrote to: {date}/{batch_id}/
+    volume_input = (
+        f"/Volumes/{catalog}/{schema}/raw_json_landing/{run_date}/{run_id}/"
+    )
 
     logger.info(
-        "Bronze ingestion starting. run_id=%s, source=%s, target=%s",
-        run_id, volume_input, bronze_table,
+        "Bronze ingestion starting. run_date=%s, run_id=%s, source=%s, target=%s",
+        run_date, run_id, volume_input, bronze_table,
     )
 
     spark = SparkSession.builder.appName("bronze_openfood_ingestion").getOrCreate()

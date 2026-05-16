@@ -135,14 +135,21 @@ def _put_file_with_retry(
     raise RuntimeError(f"Upload failed for {local_file.name}: retries exhausted.")
 
 
-def upload_run_to_volume(local_dir: str, run_id: str) -> list[str]:
+def upload_run_to_volume(
+    local_dir: str,
+    run_id: str,
+    run_date: str | None = None,
+) -> list[str]:
     """
     Upload all JSON files from a local run directory to a Databricks UC Volume.
 
+    Layout: ``{volume_base}/{run_date}/{run_id}/*.json`` so multiple batches per
+    calendar day do not overwrite each other.
+
     Args:
         local_dir : Local directory containing the JSON files for this run.
-        run_id    : Used to create a run-specific subfolder on the Volume.
-                    Ensures files from different runs never collide.
+        run_id    : Batch id (e.g. YYYYMMDD_HH00).
+        run_date  : Calendar date folder (YYYYMMDD). Defaults to first 8 chars of run_id.
 
     Returns:
         List of Volume paths that were successfully uploaded.
@@ -168,7 +175,10 @@ def upload_run_to_volume(local_dir: str, run_id: str) -> list[str]:
         logger.warning("No JSON files found in %s; nothing uploaded.", local_dir)
         return []
 
-    volume_run_path = f"{volume_base_path}/{run_id}"
+    if run_date is None:
+        run_date = run_id[:8] if len(run_id) >= 8 and run_id[:8].isdigit() else run_id
+
+    volume_run_path = f"{volume_base_path}/{run_date}/{run_id}"
     uploaded_paths: list[str] = []
 
     logger.info(

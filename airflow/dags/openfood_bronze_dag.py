@@ -20,6 +20,12 @@ WHY AIRFLOW DOES THE API FETCH (not Databricks):
     Airflow runs inside Docker on your local machine — no internet restrictions.
     Rule: all external API calls happen in Airflow. Databricks only transforms.
 
+Volume layout (per batch):
+    /Volumes/.../raw_json_landing/{run_date}/{batch_id}/*.json
+
+Pagination:
+    Each run advances the Open Food Facts API page offset (see openfood.pagination).
+
 HOW TO TRIGGER MANUALLY:
     airflow dags trigger nutrichain_openfood_daily
 """
@@ -57,23 +63,32 @@ default_args = {
 }
 
 
+def _batch_ids_from_context(context: dict) -> tuple[str, str]:
+    """Calendar date folder + batch id (YYYYMMDD_HH00) from the data interval end."""
+    data_interval_end = context["data_interval_end"]
+    run_date = data_interval_end.strftime("%Y%m%d")
+    batch_id = data_interval_end.strftime("%Y%m%d_%H00")
+    return run_date, batch_id
+
+
 def task_fetch(**context) -> dict:
     """
     Task 1: Call Open Food Facts API and save JSON pages to /tmp/ on Airflow host.
-    Returns summary dict → pushed to XCom automatically for Task 2 to read.
+    Returns summary dict → pushed to XCom automatically for downstream tasks.
     """
-    run_id = context["ds"].replace("-", "")  # "2025-04-20" → "20250420"
+    run_date, batch_id = _batch_ids_from_context(context)
     fetch_settings = load_openfood_fetch_settings()
     logger.info(
-        "Starting fetch for run_id=%s, max_pages=%d, records_per_page=%d",
-        run_id,
+        "Starting fetch for batch_id=%s run_date=%s, max_pages=%d, records_per_page=%d",
+        batch_id,
+        run_date,
         fetch_settings.max_pages,
         fetch_settings.records_per_page,
     )
 
     metadata = fetch_all_pages(
-        output_dir=f"{LOCAL_OUTPUT_DIR}/{run_id}",
-        run_id=run_id,
+        output_dir=f"{LOCAL_OUTPUT_DIR}/{run_date}/{batch_id}",
+        run_id=batch_id,
     )
     logger.info("Fetch complete: %s", metadata)
     return metadata
@@ -82,7 +97,7 @@ def task_fetch(**context) -> dict:
 def task_upload(**context) -> list:
     """
     Task 2: Upload local JSON files from /tmp/ to Databricks UC Volume.
-    Reads run_id and output_dir from XCom (set by task_fetch).
+    Reads run_id, run_date, and output_dir from XCom (set by task_fetch).
     """
     task_instance = context["task_instance"]
     metadata = task_instance.xcom_pull(task_ids="fetch_openfood_pages")
@@ -93,20 +108,27 @@ def task_upload(**context) -> list:
             "Did Task 1 succeed and return a summary dict?"
         )
 
-    run_id = metadata["run_id"]
+    batch_id = metadata["run_id"]
+    run_date = metadata.get("run_date") or batch_id[:8]
     local_dir = metadata["output_dir"]
 
-    uploaded = upload_run_to_volume(local_dir=local_dir, run_id=run_id)
+    uploaded = upload_run_to_volume(
+        local_dir=local_dir,
+        run_id=batch_id,
+        run_date=run_date,
+    )
     logger.info("Upload complete. %d files sent to Volume.", len(uploaded))
     return uploaded
 
 
 with DAG(
     dag_id="nutrichain_openfood_daily",
-    description="NutriChain: Ingest Open Food Facts products → Bronze → Silver → Gold.",
+    description=(
+        "NutriChain: Open Food Facts ingest (every 3h) → Bronze → Silver → Gold."
+    ),
     default_args=default_args,
     start_date=datetime(2025, 1, 1),
-    schedule_interval="0 2 * * *",  # Every day at 02:00 UTC
+    schedule_interval="0 */3 * * *",  # Every 3 hours at minute 0 (UTC)
     catchup=False,
     tags=["nutrichain", "bronze", "silver", "gold", "openfood", "ingestion"],
 ) as dag:
@@ -126,7 +148,8 @@ with DAG(
         databricks_conn_id="databricks_default",
         job_id="{{ var.value.databricks_bronze_job_id }}",
         job_parameters={
-            "run_id": "{{ ds_nodash }}",
+            "run_id": "{{ ti.xcom_pull(task_ids='fetch_openfood_pages')['run_id'] }}",
+            "run_date": "{{ ti.xcom_pull(task_ids='fetch_openfood_pages')['run_date'] }}",
             "catalog": CATALOG,
             "schema": BRONZE_SCHEMA,
             "table": BRONZE_TABLE,
@@ -139,7 +162,7 @@ with DAG(
         databricks_conn_id="databricks_default",
         job_id="{{ var.value.databricks_silver_job_id }}",
         job_parameters={
-            "run_id": "{{ ds_nodash }}",
+            "run_id": "{{ ti.xcom_pull(task_ids='fetch_openfood_pages')['run_id'] }}",
             "catalog": CATALOG,
             "bronze_schema": BRONZE_SCHEMA,
             "silver_schema": SILVER_SCHEMA,
@@ -167,7 +190,7 @@ with DAG(
         bash_command=(
             "cd /opt/airflow/dbt && "
             "dbt test --profiles-dir /opt/airflow/dbt "
-            "--select path:models/gold"
+            "--select source:silver path:models/gold"
         ),
     )
 

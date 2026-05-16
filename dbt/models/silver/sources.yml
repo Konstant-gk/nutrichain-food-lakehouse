@@ -28,5 +28,12 @@ sources:
               - unique
           - name: energy_kcal_per_100g
             description: "Energy normalized to kcal per 100g. Converted from kJ where needed."
+          - name: sugars_100g
+            description: "Sugars per 100g in grams."
+          - name: sugar_tier
+            description: "EU traffic-light tier: low, medium, high, or unknown."
+            tests:
+              - accepted_values:
+                  values: ['low', 'medium', 'high', 'unknown']
           - name: nutriscore_grade_mismatch
             description: "True if reported grade does not match recalculated grade."

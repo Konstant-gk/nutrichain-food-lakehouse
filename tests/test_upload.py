@@ -72,7 +72,11 @@ class TestUploadRunToVolume:
                 fake_response.text = ""
                 mock_put.return_value = fake_response
 
-                uploaded = upload_run_to_volume(local_dir=tmp_dir, run_id="test_run")
+                uploaded = upload_run_to_volume(
+                    local_dir=tmp_dir,
+                    run_id="20250420_1200",
+                    run_date="20250420",
+                )
 
         assert len(uploaded) == 3
         assert mock_put.call_count == 3
@@ -92,10 +96,9 @@ class TestUploadRunToVolume:
         assert uploaded == []
         mock_put.assert_not_called()
 
-    def test_volume_path_includes_run_id(self, monkeypatch):
+    def test_volume_path_includes_run_date_and_batch_id(self, monkeypatch):
         """
-        The volume upload path must include the run_id as a subfolder.
-        This ensures files from different runs stay in separate folders.
+        Volume path must be {base}/{run_date}/{batch_id}/ so batches do not overwrite.
         """
         monkeypatch.setenv("DATABRICKS_HOST", "https://fake.community.cloud.databricks.com")
         monkeypatch.setenv("DATABRICKS_TOKEN", "dapi_fake")
@@ -109,8 +112,11 @@ class TestUploadRunToVolume:
                 fake_response.text = ""
                 mock_put.return_value = fake_response
 
-                upload_run_to_volume(local_dir=tmp_dir, run_id="myrun")
+                upload_run_to_volume(
+                    local_dir=tmp_dir,
+                    run_id="20250420_1500",
+                    run_date="20250420",
+                )
 
-            # Extract the URL sent to the Files API.
             called_url = mock_put.call_args[0][0]
-            assert "myrun" in called_url
+            assert "20250420/20250420_1500" in called_url

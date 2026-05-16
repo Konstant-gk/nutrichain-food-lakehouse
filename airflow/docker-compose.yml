@@ -72,6 +72,7 @@ services:
       - ./logs:/opt/airflow/logs      # Mount logs/ folder INTO the container.
       - ../src:/opt/airflow/src        # Mount src/ folder INTO the container.
       - ../dbt:/opt/airflow/dbt        # dbt project + profiles.yml for BashOperator tasks
+      - openfood_state:/tmp/nutrichain_openfood  # Pagination offset between 3h runs
     command: airflow scheduler
 
 
@@ -103,8 +104,10 @@ services:
       - ./logs:/opt/airflow/logs
       - ../src:/opt/airflow/src
       - ../dbt:/opt/airflow/dbt
+      - openfood_state:/tmp/nutrichain_openfood
     command: airflow webserver 
 
 # ── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
   postgres_data:                # For persistence.
+  openfood_state:               # OPENFOOD_PAGINATION_STATE_PATH + fetch staging

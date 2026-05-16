@@ -164,18 +164,50 @@ def main(args: argparse.Namespace) -> None:
     silver_df = flat_df
 
     # 3a. Energy: normalize to kcal per 100g
-    # Open Food Facts stores energy in kJ in `energy_100g` and kcal in
-    # `energy-kcal_100g`. When kcal field is available, use it directly.
-    # When only kJ is available, convert: kcal = kJ / 4.184
+    # OFF stores kJ in `energy_100g` and sometimes mislabels kJ as `energy-kcal_100g`.
+    # Plausible per-100g band tops out ~900 kcal (pure fat). Values above that in the
+    # kcal field are treated as kJ and converted (÷ 4.184).
+    _MAX_KCAL_PER_100G = 900.0
     silver_df = silver_df.withColumn(
         "energy_kcal_per_100g",
         F.when(
-            F.col("energy_kcal_raw_100g").isNotNull() & (F.col("energy_kcal_raw_100g") > 0),
+            F.col("energy_kcal_raw_100g").isNotNull()
+            & (F.col("energy_kcal_raw_100g") > 0)
+            & (F.col("energy_kcal_raw_100g") <= _MAX_KCAL_PER_100G),
             F.col("energy_kcal_raw_100g"),
-        ).when(
+        )
+        .when(
             F.col("energy_raw_100g").isNotNull() & (F.col("energy_raw_100g") > 0),
             F.round(F.col("energy_raw_100g") / 4.184, 2),
-        ).otherwise(F.lit(None).cast("double")),
+        )
+        .when(
+            F.col("energy_kcal_raw_100g").isNotNull()
+            & (F.col("energy_kcal_raw_100g") > _MAX_KCAL_PER_100G),
+            F.round(F.col("energy_kcal_raw_100g") / 4.184, 2),
+        )
+        .otherwise(F.lit(None).cast("double")),
+    )
+    # After conversion, drop values still outside plausible band (garbage-in from OFF).
+    silver_df = silver_df.withColumn(
+        "energy_kcal_per_100g",
+        F.when(
+            F.col("energy_kcal_per_100g").isNotNull()
+            & (
+                (F.col("energy_kcal_per_100g") < 0)
+                | (F.col("energy_kcal_per_100g") > _MAX_KCAL_PER_100G)
+            ),
+            F.lit(None).cast("double"),
+        ).otherwise(F.col("energy_kcal_per_100g")),
+    )
+
+    # EAN-style barcode flag for monitoring (OFF has valid non-EAN codes we still keep).
+    silver_df = silver_df.withColumn(
+        "barcode_is_ean",
+        F.when(
+            F.col("barcode").isNotNull()
+            & F.trim(F.col("barcode")).rlike("^[0-9]{8,14}$"),
+            F.lit(True),
+        ).otherwise(F.lit(False)),
     )
 
     # 3b. Sodium: fill null sodium from salt (sodium = salt / 2.5)

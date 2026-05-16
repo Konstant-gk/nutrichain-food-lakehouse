@@ -25,6 +25,21 @@ def _no_time_sleep(monkeypatch):
     monkeypatch.setattr("src.openfood.fetch.time.sleep", lambda *_args, **_kwargs: None)
 
 
+@pytest.fixture(autouse=True)
+def _pagination_state_tmp(monkeypatch, tmp_path):
+    """Isolate pagination state so tests do not share offsets."""
+    state_file = tmp_path / "pagination_state.json"
+    monkeypatch.setenv("OPENFOOD_PAGINATION_STATE_PATH", str(state_file))
+    monkeypatch.setattr(
+        "src.openfood.fetch.load_next_page_start",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        "src.openfood.fetch.save_next_page_start",
+        lambda _next: None,
+    )
+
+
 def make_fake_response(products: list, status_code: int = 200) -> MagicMock:
     """Build a fake requests.Response matching Open Food Facts API shape."""
     page_size = load_openfood_fetch_settings().records_per_page

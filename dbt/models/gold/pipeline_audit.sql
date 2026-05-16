@@ -50,6 +50,19 @@ audit AS (
             / NULLIF(COUNT(*), 0) * 100, 2
         )                                               AS missing_kcal_pct,
 
+        -- Barcode format (monitoring — non-EAN codes are kept, not dropped)
+        ROUND(
+            SUM(
+                CASE
+                    WHEN barcode IS NULL
+                        OR NOT RLIKE(TRIM(barcode), '^[0-9]{8,14}$')
+                    THEN 1.0
+                    ELSE 0
+                END
+            ) / NULLIF(COUNT(*), 0) * 100,
+            2
+        )                                               AS invalid_ean_pct,
+
         -- NOVA group distribution
         SUM(CASE WHEN nova_group = 1 THEN 1 ELSE 0 END) AS nova_1_unprocessed_count,
         SUM(CASE WHEN nova_group = 2 THEN 1 ELSE 0 END) AS nova_2_culinary_count,

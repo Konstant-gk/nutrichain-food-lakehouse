@@ -94,6 +94,14 @@ models:
         description: "Date when this snapshot was taken (= Airflow run date)."
         tests:
           - not_null
+      - name: energy_kcal_per_100g
+        description: "Energy per 100g in kcal."
+      - name: sugars_100g
+        description: "Sugars per 100g in grams."
+      - name: sugar_tier
+        tests:
+          - accepted_values:
+              values: ['low', 'medium', 'high', 'unknown']
       - name: nutriscore_grade_mismatch
         description: "TRUE if reported grade does not match the official formula."
       - name: healthiness_rank_in_category
