@@ -30,6 +30,8 @@ services:
     build:
       context: ..
       dockerfile: airflow/Dockerfile
+    # Root only for chown on openfood_state; scheduler/webserver still run as airflow.
+    user: "0:0"
     depends_on:
       postgres:
         condition: service_healthy  # Wait for Postgres to be ready first.
@@ -38,10 +40,16 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
       AIRFLOW__CORE__LOAD_EXAMPLES: "false" # Don't show the tutorial DAGs.
       PYTHONPATH: /opt/airflow/src
+    volumes:
+      - openfood_state:/tmp/nutrichain_openfood
     command:
       - bash
       - -c
-      - airflow db init && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL}
+      - |
+        mkdir -p /tmp/nutrichain_openfood
+        chown -R 50000:0 /tmp/nutrichain_openfood
+        chmod -R g+rwX /tmp/nutrichain_openfood
+        exec gosu airflow bash -c "airflow db init && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL}"
 
   
   # ── Scheduler ─────────────────────────────────────────────────────────────
