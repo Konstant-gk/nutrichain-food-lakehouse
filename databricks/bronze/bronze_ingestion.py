@@ -26,6 +26,57 @@ from pyspark.sql import functions as F
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Stable Bronze contract: string JSON for products, no inferred struct column.
+BRONZE_WRITE_COLUMNS = (
+    "ingest_run_id",
+    "ingest_layer",
+    "ingested_at",
+    "source_system",
+    "source_url",
+    "api_page_number",
+    "page_number",
+    "page_size",
+    "fetched_at",
+    "total_products_reported",
+    "raw_products_json",
+)
+
+
+def _migrate_legacy_bronze_schema(spark: SparkSession, bronze_table: str) -> None:
+    """
+    Remove legacy `products` struct column (fixes DELTA_METADATA_MISMATCH on append).
+
+    Uses CREATE OR REPLACE + EXCEPT — works without delta.columnMapping (DROP COLUMN
+  does not on many UC / Free workspaces).
+    """
+    if not spark.catalog.tableExists(bronze_table):
+        return
+    column_names = {f.name for f in spark.table(bronze_table).schema.fields}
+    if "products" not in column_names:
+        return
+    logger.warning(
+        "Bronze table %s still has legacy column products; rebuilding without it.",
+        bronze_table,
+    )
+    spark.sql(
+        f"CREATE OR REPLACE TABLE {bronze_table} "
+        f"AS SELECT * EXCEPT (products) FROM {bronze_table}"
+    )
+
+
+def _align_to_write_schema(bronze_df, run_id: str):
+    """Project to the canonical Bronze columns (add nulls for any missing fields)."""
+    df = bronze_df
+    if "api_page_number" not in df.columns and "page_number" in df.columns:
+        df = df.withColumn("api_page_number", F.col("page_number"))
+    for col_name in BRONZE_WRITE_COLUMNS:
+        if col_name not in df.columns:
+            df = df.withColumn(col_name, F.lit(None))
+    return (
+        df.withColumn("ingest_run_id", F.lit(run_id))
+        .select(*BRONZE_WRITE_COLUMNS)
+    )
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -93,7 +144,6 @@ def main(args: argparse.Namespace) -> None:
     # Silver parses this JSON with a fixed array<struct<...>> schema (see silver_transform).
     bronze_df = (
         raw_df
-        .withColumn("ingest_run_id", F.lit(run_id))
         .withColumn("ingest_layer", F.lit("bronze"))
         .withColumn("ingested_at", F.current_timestamp())
         .withColumn("source_system", F.lit("open_food_facts_api"))
@@ -107,8 +157,16 @@ def main(args: argparse.Namespace) -> None:
         .withColumn("raw_products_json", F.to_json(F.col("products")))
         .drop("products")
     )
+    bronze_df = _align_to_write_schema(bronze_df, run_id)
 
-    bronze_df.write.format("delta").mode("append").saveAsTable(bronze_table)
+    _migrate_legacy_bronze_schema(spark, bronze_table)
+
+    (
+        bronze_df.write.format("delta")
+        .mode("append")
+        .option("mergeSchema", "true")
+        .saveAsTable(bronze_table)
+    )
 
     final_count = bronze_df.count()
     logger.info(
