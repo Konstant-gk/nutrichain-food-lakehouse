@@ -48,8 +48,24 @@ from pyspark.sql import functions as F
 from pyspark.sql.functions import sha2, concat_ws
 from pyspark.sql.window import Window
 
-# Repo src/ for shared cleaning helpers (local runs + Databricks repo checkout).
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+def _silver_module_dir() -> Path:
+    """Directory containing this module (databricks/silver/)."""
+    try:
+        return Path(__file__).resolve().parent
+    except NameError:
+        # Databricks file tasks exec() the script without defining __file__.
+        cwd = Path.cwd()
+        for base in (cwd, cwd / "databricks" / "silver", cwd / "silver"):
+            if (base / "data" / "country_alias_lookup.csv").is_file():
+                return base
+            if (base / "silver_transform.py").is_file():
+                return base
+        return cwd / "databricks" / "silver"
+
+
+_SILVER_DIR = _silver_module_dir()
+_REPO_ROOT = _SILVER_DIR.resolve().parents[2]
 _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
@@ -70,7 +86,7 @@ from openfood.silver_cleaning import (  # noqa: E402
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-_COUNTRY_LOOKUP_CSV = Path(__file__).resolve().parent / "data" / "country_alias_lookup.csv"
+_COUNTRY_LOOKUP_CSV = _SILVER_DIR / "data" / "country_alias_lookup.csv"
 
 _NUTRIENT_COLS = (
     "proteins_100g",
