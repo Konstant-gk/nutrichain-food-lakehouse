@@ -49,7 +49,7 @@ services:
         mkdir -p /tmp/nutrichain_openfood
         chown -R 50000:0 /tmp/nutrichain_openfood
         chmod -R g+rwX /tmp/nutrichain_openfood
-        exec gosu airflow bash -c "airflow db init && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL}"
+        exec su -s /bin/bash airflow -c "airflow db init && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL}"
 
   
   # ── Scheduler ─────────────────────────────────────────────────────────────

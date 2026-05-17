@@ -124,18 +124,20 @@ def task_upload(**context) -> list:
 with DAG(
     dag_id="nutrichain_openfood_daily",
     description=(
-        "NutriChain: Open Food Facts ingest (every 3h) → Bronze → Silver → Gold."
+        "NutriChain: Open Food Facts ingest (every 4h) → Bronze → Silver → Gold."
     ),
     default_args=default_args,
     start_date=datetime(2025, 1, 1),
-    schedule_interval="0 */3 * * *",  # Every 3 hours at minute 0 (UTC)
-    catchup=False,
+    schedule_interval="0 */4 * * *",  # Every 4 hours at minute 0 (UTC)
+    catchup=False,  # Do not backfill missed ticks while Airflow was down
+    max_active_runs=1,  # Only one full pipeline at a time (avoids pile-up on wake)
     tags=["nutrichain", "bronze", "silver", "gold", "openfood", "ingestion"],
 ) as dag:
 
     fetch_task = PythonOperator(
         task_id="fetch_openfood_pages",
         python_callable=task_fetch,
+        execution_timeout=timedelta(hours=1),
     )
 
     upload_task = PythonOperator(
