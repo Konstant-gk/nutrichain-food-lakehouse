@@ -86,11 +86,12 @@ nutrichain-food-lakehouse/
 │   └── upload.py                   # Volume upload
 ├── databricks/
 │   ├── bronze/bronze_ingestion.py
-│   └── silver/silver_transform.py  # Gold is dbt-only (no PySpark gold job)
+│   ├── silver/silver_transform.py  # Gold is dbt-only (no PySpark gold job)
+│   └── silver/data/country_alias_lookup.csv  # ISO + OFF aliases (Silver runtime)
 ├── dbt/
 │   ├── models/gold/                # dims, fact, pipeline_audit
 │   ├── models/silver/              # ephemeral bridge + sources.yml
-│   ├── seeds/                      # e.g. nutriscore_grade_lookup.csv
+│   ├── seeds/                      # nutriscore_grade_lookup.csv only
 │   └── tests/                      # Custom SQL data quality tests
 ├── tests/                          # pytest (fetch, upload, pagination)
 ├── powerbi/
@@ -210,12 +211,51 @@ GitHub Actions secrets: `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_REPO_
 
 Databricks jobs must reference notebook paths under your **Repos** mount (e.g. `/Repos/<user>/nutrichain-food-lakehouse/databricks/bronze/...`), not `/Shared/...`.
 
+## Backfill after Silver or Gold schema changes
+
+A normal DAG run only processes **one** `ingest_run_id` in Bronze and **MERGE**s into Silver. Older products keep old column values until they appear in a new batch. After adding cleansing columns or country lookup logic, run a **one-time full Silver rebuild**, then rebuild Gold and refresh Power BI.
+
+| Step | Where | Action |
+|------|--------|--------|
+| 1 | GitHub `main` | Push code; wait for CI Repos sync (or Pull in Databricks Repos UI). |
+| 2 | Databricks | Run Silver job with **`--backfill_all`** (no `run_id`). Overwrites `silver.silver_openfood_products` from **all** Bronze history; dedupes by `barcode` (latest `last_modified_unix` wins). |
+| 3 | Airflow or dbt CLI | `dbt run --select path:models/gold` then `dbt test` (Airflow tasks `run_dbt_gold_models` / `test_dbt_gold_models`). |
+| 4 | Power BI | Refresh the dataset / report. |
+
+**Databricks job parameters (maintenance run):**
+
+```text
+--backfill_all
+--catalog nutrichain_lakehouse
+--bronze_schema bronze
+--silver_schema silver
+--bronze_table bronze_openfood_products_raw
+--silver_table silver_openfood_products
+```
+
+(Omit `--run_id` when `backfill_all` is set.)
+
+**Incremental runs (Airflow):** keep passing `--run_id` from the fetch task; do **not** set `--backfill_all`.
+
+**Country aliases:** edit `databricks/silver/data/country_alias_lookup.csv`, sync repo, re-run backfill (or wait for products to reappear in incremental MERGE). To find unmapped countries after backfill:
+
+```sql
+SELECT primary_country, country_iso_code, COUNT(*) AS n
+FROM nutrichain_lakehouse.silver.silver_openfood_products
+WHERE primary_country = 'Unknown Country'
+GROUP BY 1, 2
+ORDER BY n DESC
+LIMIT 50;
+```
+
+Add rows to the CSV (`alias,iso_code,display_name`), sync, and backfill again.
+
 ## Documentation
 
 | Path | Contents |
 |------|----------|
 | [docs/architecture/](docs/architecture/) | Draw.io and diagram assets for the lakehouse |
-| [docs/plan/openfda-project-plan.md](docs/plan/openfda-project-plan.md) | Earlier portfolio plan artifact (historical) |
+| [docs/plan/openfood-nutrichain-project-plan.md](docs/plan/openfood-nutrichain-project-plan.md) | Portfolio project plan (company story, architecture, layers, success metrics) |
 | `env.example.txt` | Full list of environment variables |
 
 Local explanation guides under `docs/explanation/` may exist on disk but are gitignored in this repo.
@@ -232,7 +272,7 @@ Local explanation guides under `docs/explanation/` may exist on disk but are git
 
 ## Known constraints
 
-- **Bounded ingest:** `OPENFOOD_MAX_PAGES` limits pages per run; full historical backfill is a separate operational exercise.
+- **Bounded ingest:** `OPENFOOD_MAX_PAGES` limits pages per run; use `--backfill_all` on Silver to re-apply cleansing to all Bronze already loaded.
 - **API etiquette:** Set `OPENFOOD_USER_AGENT` with contact info; tune `OPENFOOD_POLITE_DELAY_SECONDS` for rate limits.
 - **Databricks Free tier:** Fair-use compute; larger page counts increase runtime and cost.
 - **Secrets:** Never commit `.env` or `dbt/profiles.yml`; use Databricks secrets or GitHub Actions secrets in automation.
