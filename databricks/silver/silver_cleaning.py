@@ -1,14 +1,17 @@
 """
 silver_cleaning.py
 ------------------
-Pure-Python helpers for Silver text/nutrition cleansing (testable without Spark).
-Spark column builders live in the same module for use by silver_transform.py.
+Text and nutrition cleansing helpers for silver_transform.py (PySpark).
+
+Lives under databricks/silver/ so Databricks jobs do not depend on src/openfood/.
 """
 
 from __future__ import annotations
 
 import html
 import re
+from functools import reduce
+from operator import add
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -16,10 +19,9 @@ if TYPE_CHECKING:
 
 try:
     from pyspark.sql import functions as F
-except ImportError:  # pragma: no cover - local pytest without PySpark
+except ImportError:  # pragma: no cover
     F = None  # type: ignore[assignment]
 
-# Minimum filled fields (of 10) for data_quality_tier = 'complete'
 COMPLETENESS_FIELD_NAMES = (
     "product_name",
     "ingredients_text",
@@ -52,7 +54,6 @@ _PACKAGING_ALIASES = {
 
 
 def strip_off_lang_prefix(value: Optional[str]) -> str:
-    """Remove leading OFF taxonomy tags (en:, fr:, de:en:, ...)."""
     if not value:
         return ""
     text = value.strip()
@@ -65,7 +66,6 @@ def strip_off_lang_prefix(value: Optional[str]) -> str:
 
 
 def clean_category_name(value: Optional[str]) -> str:
-    """English display category: strip tags, hyphens → spaces, title case."""
     text = strip_off_lang_prefix(value)
     if not text:
         return "Unknown Category"
@@ -76,7 +76,6 @@ def clean_category_name(value: Optional[str]) -> str:
 
 
 def country_lookup_key(value: Optional[str]) -> str:
-    """Normalize raw country token for alias-table join."""
     text = strip_off_lang_prefix(value).strip().lower()
     text = text.replace("-", " ")
     return " ".join(text.split())
@@ -90,7 +89,6 @@ def clean_product_name(value: Optional[str]) -> str:
 
 
 def clean_off_tag_list(value: Optional[str], unknown_label: str = "Unknown") -> str:
-    """Comma-separated OFF tags → display list without lang prefixes."""
     if not value or not str(value).strip():
         return unknown_label
     parts = [strip_off_lang_prefix(p).replace("-", " ") for p in str(value).split(",")]
@@ -113,7 +111,7 @@ def normalize_nutriscore_grade_reported(value: Optional[str]) -> str:
     if not value or not str(value).strip():
         return "Unknown"
     text = str(value).strip().lower().replace("_", " ").replace("-", " ")
-    if text in {"not applicable", "not applicable ", "na", "n a"}:
+    if text in {"not applicable", "na", "n a"}:
         return "Not Applicable"
     if text in {"a", "b", "c", "d", "e"}:
         return text.upper()
@@ -123,24 +121,15 @@ def normalize_nutriscore_grade_reported(value: Optional[str]) -> str:
 
 
 def reported_grade_for_mismatch(value: "Column") -> "Column":
-    """Lowercase letter grades for comparison; null when Unknown / Not Applicable."""
     return (
-        F.when(
-            value.isin("Unknown", "Not Applicable"),
-            F.lit(None),
-        )
-        .when(
-            value.isin("A", "B", "C", "D", "E"),
-            F.lower(value),
-        )
+        F.when(value.isin("Unknown", "Not Applicable"), F.lit(None))
+        .when(value.isin("A", "B", "C", "D", "E"), F.lower(value))
         .otherwise(F.lower(F.trim(value)))
     )
 
 
 def spark_strip_off_prefix(col: "Column") -> "Column":
-    """Strip repeated xx: prefixes (Spark SQL)."""
     out = F.trim(col)
-    # Loop up to 5 prefixes (covers de:en:germany-style values)
     for _ in range(5):
         out = F.regexp_replace(out, r"(?i)^[a-z]{2}:", "")
         out = F.trim(out)
@@ -171,7 +160,6 @@ def spark_clean_product_name(col: "Column") -> "Column":
 
 
 def spark_clean_off_tag_list(col: "Column", unknown_label: str = "Unknown") -> "Column":
-    """Strip en: prefixes from comma-separated tags and title-case each token."""
     stripped = F.regexp_replace(col, r"(?i)(^|,\s*)[a-z]{2}:", "$1")
     parts = F.split(stripped, ",")
     joined = F.array_join(
@@ -206,9 +194,6 @@ def spark_round_nutrient(col: "Column") -> "Column":
 
 
 def spark_completeness_score(cols: list["Column"]) -> "Column":
-    from functools import reduce
-    from operator import add
-
     filled = [
         F.when(c.isNotNull() & (F.length(F.trim(c.cast("string"))) > 0), 1).otherwise(0)
         for c in cols

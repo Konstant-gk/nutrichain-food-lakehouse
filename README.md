@@ -87,6 +87,7 @@ nutrichain-food-lakehouse/
 ├── databricks/
 │   ├── bronze/bronze_ingestion.py
 │   ├── silver/silver_transform.py  # Gold is dbt-only (no PySpark gold job)
+│   ├── silver/silver_cleaning.py   # cleansing helpers (same folder as transform)
 │   └── silver/data/country_alias_lookup.csv  # ISO + OFF aliases (Silver runtime)
 ├── dbt/
 │   ├── models/gold/                # dims, fact, pipeline_audit

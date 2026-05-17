@@ -65,12 +65,10 @@ def _silver_module_dir() -> Path:
 
 
 _SILVER_DIR = _silver_module_dir()
-_REPO_ROOT = _SILVER_DIR.resolve().parents[2]
-_SRC = _REPO_ROOT / "src"
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
+if str(_SILVER_DIR) not in sys.path:
+    sys.path.insert(0, str(_SILVER_DIR))
 
-from openfood.silver_cleaning import (  # noqa: E402
+from silver_cleaning import (  # noqa: E402
     COMPLETENESS_FIELD_NAMES,
     reported_grade_for_mismatch,
     spark_clean_category,
