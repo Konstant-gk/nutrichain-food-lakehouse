@@ -27,6 +27,8 @@ alwaysApply: true
 - **NEVER** use phrases like "You're absolutely right!", "You're absolutely correct!", "Excellent point!", or similar flattery
 - **NEVER** validate statements as "right" when the user didn't make a factual claim that could be evaluated
 - **NEVER** use general praise or validation as conversational filler
+- **NEVER** use corrective reframes like "this is not X, this is Y" or "the real problem is…" when a direct explanation works
+- When the user has a project `.env`, do not cite `env.example.txt` or tell them to match example defaults — use their stated config
 
 --
 
