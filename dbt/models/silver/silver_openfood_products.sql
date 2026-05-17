@@ -16,6 +16,7 @@ SELECT
     primary_brand,
     primary_category,
     primary_country,
+    country_iso_code,
     brands_raw,
     categories_raw,
     countries_raw,
@@ -37,6 +38,9 @@ SELECT
     ingredient_count,
     nova_group,
     nova_group_label,
+    completeness_score,
+    data_quality_tier,
+    is_nutritional_data_complete,
 
     -- Tier classifications (EU thresholds)
     sugar_tier,

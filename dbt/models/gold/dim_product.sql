@@ -39,7 +39,18 @@ final AS (
 
         -- NOVA classification
         nova_group,
-        nova_group_label,
+        CASE nova_group_label
+            WHEN 'unclassified' THEN 'Unclassified'
+            WHEN 'ultra_processed' THEN 'Ultra-processed'
+            WHEN 'culinary_ingredient' THEN 'Culinary ingredient'
+            WHEN 'unprocessed' THEN 'Unprocessed'
+            WHEN 'processed' THEN 'Processed'
+            ELSE nova_group_label
+        END AS nova_group_label,
+
+        completeness_score,
+        data_quality_tier,
+        is_nutritional_data_complete,
 
         -- Nutri-Score information
         nutriscore_grade_reported,

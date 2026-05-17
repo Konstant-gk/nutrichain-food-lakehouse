@@ -22,10 +22,12 @@ models:
           - not_null
           - unique
       - name: nova_group
-        description: "NOVA food processing group: 1=unprocessed, 4=ultra-processed."
+        description: "NOVA food processing group: 1=unprocessed, 4=ultra-processed; null if unclassified."
+      - name: data_quality_tier
+        description: "complete when >=3 key fields filled; otherwise sparse."
         tests:
           - accepted_values:
-              values: [1, 2, 3, 4]
+              values: ['complete', 'sparse']
 
   - name: dim_brand
     description: "Brand dimension — one row per unique brand name."

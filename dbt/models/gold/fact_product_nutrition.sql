@@ -34,7 +34,11 @@ with_keys AS (
         ) AS category_key,
         SHA2(silver.primary_country, 256) AS country_key,
         SHA2(
-            COALESCE(LOWER(silver.nutriscore_grade_reported), 'unknown'),
+            CASE
+                WHEN silver.nutriscore_grade_reported IN ('A', 'B', 'C', 'D', 'E')
+                    THEN LOWER(silver.nutriscore_grade_reported)
+                ELSE 'unknown'
+            END,
             256
         ) AS nutriscore_key,
         {%- set _rd = var('run_date', none) %}
@@ -100,6 +104,10 @@ final AS (
         COALESCE(NULLIF(TRIM(CAST(primary_brand AS STRING)), ''), 'Unknown')       AS brand_name,
         COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown') AS category_name,
         primary_country                 AS country_name,
+        country_iso_code,
+        data_quality_tier,
+        completeness_score,
+        is_nutritional_data_complete,
 
         -- ── Nutrition measures per 100g ───────────────────────────────────
         energy_kcal_per_100g,
@@ -116,7 +124,14 @@ final AS (
         nutriscore_score_raw,
         ingredient_count,
         nova_group,
-        nova_group_label,
+        CASE nova_group_label
+            WHEN 'unclassified' THEN 'Unclassified'
+            WHEN 'ultra_processed' THEN 'Ultra-processed'
+            WHEN 'culinary_ingredient' THEN 'Culinary ingredient'
+            WHEN 'unprocessed' THEN 'Unprocessed'
+            WHEN 'processed' THEN 'Processed'
+            ELSE nova_group_label
+        END AS nova_group_label,
 
         -- ── Tier classifications (EU thresholds from Silver) ──────────────
         sugar_tier,
@@ -145,25 +160,25 @@ final AS (
         -- These are the "is this product worse than its peers?" flags
         -- Power BI uses these as filter conditions: "show me all products above avg"
         CASE
-            WHEN sugars_100g IS NULL OR category_avg_sugar_100g IS NULL THEN NULL
-            WHEN sugars_100g > category_avg_sugar_100g THEN TRUE
-            ELSE FALSE
+            WHEN sugars_100g IS NULL OR category_avg_sugar_100g IS NULL THEN 'Unknown'
+            WHEN sugars_100g > category_avg_sugar_100g THEN 'Yes'
+            ELSE 'No'
         END AS is_above_avg_sugar,
 
         CASE
-            WHEN fat_100g IS NULL OR category_avg_fat_100g IS NULL THEN NULL
-            WHEN fat_100g > category_avg_fat_100g THEN TRUE
-            ELSE FALSE
+            WHEN fat_100g IS NULL OR category_avg_fat_100g IS NULL THEN 'Unknown'
+            WHEN fat_100g > category_avg_fat_100g THEN 'Yes'
+            ELSE 'No'
         END AS is_above_avg_fat,
 
         CASE
-            WHEN salt_100g IS NULL OR category_avg_salt_100g IS NULL THEN NULL
-            WHEN salt_100g > category_avg_salt_100g THEN TRUE
-            ELSE FALSE
+            WHEN salt_100g IS NULL OR category_avg_salt_100g IS NULL THEN 'Unknown'
+            WHEN salt_100g > category_avg_salt_100g THEN 'Yes'
+            ELSE 'No'
         END AS is_above_avg_salt,
 
         -- ── Healthiness ranking ───────────────────────────────────────────
-        healthiness_rank_in_category,
+        CAST(healthiness_rank_in_category AS INT) AS healthiness_rank_in_category,
         category_product_count,
 
         -- Healthiness percentile (0 = healthiest, 100 = worst)

@@ -3,7 +3,9 @@
 -- Purpose: Country dimension — one row per unique country.
 
 WITH source AS (
-    SELECT DISTINCT primary_country AS country_name
+    SELECT DISTINCT
+        country_iso_code,
+        primary_country AS country_name
     FROM {{ source('silver', 'silver_openfood_products') }}
     WHERE primary_country IS NOT NULL
       AND LENGTH(TRIM(primary_country)) > 0
@@ -12,6 +14,7 @@ WITH source AS (
 final AS (
     SELECT
         SHA2(country_name, 256) AS country_key,
+        country_iso_code,
         country_name,
         CURRENT_TIMESTAMP()     AS gold_built_at
     FROM source
