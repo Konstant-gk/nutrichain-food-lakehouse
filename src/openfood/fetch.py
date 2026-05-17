@@ -46,6 +46,9 @@ BASE_URL = "https://world.openfoodfacts.org/api/v2/search"
 # 429 = rate limited, 503 = temporarily unavailable, 502 = bad gateway
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# Cap 503 backoff so Airflow workers keep heartbeating (long sleep → zombie/SIGTERM).
+_MAX_RETRY_WAIT_SECONDS = 60
+
 # OpenFood blocks anonymous library defaults;
 _DEFAULT_USER_AGENT = (
     "NutriChainFoodLakehouse/1.0 "
@@ -173,8 +176,8 @@ def fetch_all_pages(
                     # Exponential backoff WITH jitter
                     # Jitter = small random extra wait so multiple retries
                     # don't all hit the server at exactly the same second
-                    base_wait = 2 ** attempt          # 1, 2, 4, 8, 16 seconds
-                    jitter = random.uniform(0, 3)   # random 0-3 extra seconds
+                    base_wait = min(2 ** attempt, _MAX_RETRY_WAIT_SECONDS)
+                    jitter = random.uniform(0, 3)
                     wait_s = base_wait + jitter
 
                     logger.warning(
@@ -198,7 +201,7 @@ def fetch_all_pages(
                     raise RuntimeError(
                         f"API page {api_page} timed out after {max_retries} attempts."
                     )
-                wait_s = 2 ** attempt + random.uniform(0, 1)
+                wait_s = min(2 ** attempt, _MAX_RETRY_WAIT_SECONDS) + random.uniform(0, 1)
                 time.sleep(wait_s)
 
         # ── After retry loop: check if we actually got a good response ────────
@@ -221,6 +224,7 @@ def fetch_all_pages(
                 "Empty products on API page %d. Dataset exhausted. Stopping early.",
                 api_page,
             )
+            save_next_page_start(1)
             break
 
         payload = {
@@ -248,6 +252,9 @@ def fetch_all_pages(
             "✓ Saved API page %d → %s (%d products, total so far: %d)",
             api_page, filename, len(products), records_total,
         )
+
+        # Advance offset after each successful page so a killed task does not re-pull earlier pages.
+        save_next_page_start(api_page + 1)
 
         # Polite delay between pages — NEVER remove this for a free public API
         time.sleep(polite_delay_s)
