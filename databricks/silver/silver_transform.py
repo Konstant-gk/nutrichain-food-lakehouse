@@ -26,12 +26,14 @@ Transformations applied (all documented in docs/data_dictionary.md):
    14. Nutrition rounding     — 2 dp; negatives → null
    15. data_quality_tier      — complete vs sparse (completeness score)
 
-Runs as: Databricks Python file job task.
-Triggered by: Airflow DatabricksRunNowOperator (Task 4 in the DAG).
+Runs as: Databricks Python file job (same script for every mode).
 
-Maintenance: pass --backfill_all to read all Bronze history, dedupe by barcode,
-and overwrite Silver (one-time after schema/cleaning changes). Airflow daily runs
-use --run_id only (MERGE).
+Modes (one script, two job parameter sets — pros do not fork the transform):
+  - Airflow daily:  --run_id <batch_id>  → MERGE one Bronze batch into Silver
+  - Databricks maintenance:  --backfill_all  → read all Bronze, dedupe, overwrite Silver
+
+Airflow: DatabricksRunNowOperator passes run_id only (no backfill_all).
+Databricks: create a second job definition pointing at this file with --backfill_all.
 """
 
 from __future__ import annotations
@@ -49,6 +51,13 @@ from pyspark.sql.functions import sha2, concat_ws
 from pyspark.sql.window import Window
 
 
+def _coerce_bool(value: object) -> bool:
+    """Parse CLI / Databricks job flags (true, 1, yes) and store_true."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _silver_module_dir() -> Path:
     """Directory containing this module (databricks/silver/)."""
     try:
@@ -56,10 +65,17 @@ def _silver_module_dir() -> Path:
     except NameError:
         # Databricks file tasks exec() the script without defining __file__.
         cwd = Path.cwd()
-        for base in (cwd, cwd / "databricks" / "silver", cwd / "silver"):
-            if (base / "data" / "country_alias_lookup.csv").is_file():
+        candidates: list[Path] = [
+            cwd,
+            cwd / "databricks" / "silver",
+            cwd / "silver",
+        ]
+        for parent in cwd.parents:
+            candidates.append(parent / "databricks" / "silver")
+        for base in candidates:
+            if (base / "silver_cleaning.py").is_file():
                 return base
-            if (base / "silver_transform.py").is_file():
+            if (base / "data" / "country_alias_lookup.csv").is_file():
                 return base
         return cwd / "databricks" / "silver"
 
@@ -120,8 +136,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--backfill_all",
-        action="store_true",
-        help="Read all Bronze rows, rebuild Silver, overwrite table (maintenance).",
+        nargs="?",
+        const="true",
+        default="false",
+        metavar="BOOL",
+        help=(
+            "Full Silver rebuild from all Bronze (overwrite). "
+            "Use alone (--backfill_all) or with true/false. Default: false."
+        ),
     )
     p.add_argument("--catalog", default="nutrichain_lakehouse")
     p.add_argument("--bronze_schema", default="bronze")
@@ -158,8 +180,8 @@ def _country_alias_key(col):
 
 
 def main(args: argparse.Namespace) -> None:
-    run_id = args.run_id.strip()
-    backfill_all = bool(args.backfill_all)
+    run_id = (args.run_id or "").strip()
+    backfill_all = _coerce_bool(args.backfill_all)
     catalog = args.catalog.strip()
     bronze_schema = args.bronze_schema.strip()
     silver_schema = args.silver_schema.strip()
@@ -186,6 +208,8 @@ def main(args: argparse.Namespace) -> None:
     bronze_full = f"{catalog}.{bronze_schema}.{bronze_table}"
     silver_full = f"{catalog}.{silver_schema}.{silver_table}"
 
+    logger.info("Silver module dir: %s", _SILVER_DIR)
+    logger.info("Country lookup CSV: %s", args.country_lookup_csv)
     logger.info(
         "Silver transform starting. backfill_all=%s, run_id=%s, source=%s, target=%s",
         backfill_all, run_id or "(all)", bronze_full, silver_full,
@@ -302,7 +326,11 @@ def main(args: argparse.Namespace) -> None:
             F.lit("XX"),
         ),
     )
-    silver_df = silver_df.join(iso_display, on="country_iso_code", how="left")
+    silver_df = silver_df.join(
+        iso_display,
+        silver_df["country_iso_code"] == iso_display["iso_code"],
+        "left",
+    )
     silver_df = (
         silver_df.withColumn(
             "primary_country",
