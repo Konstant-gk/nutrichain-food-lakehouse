@@ -137,7 +137,7 @@ with DAG(
     fetch_task = PythonOperator(
         task_id="fetch_openfood_pages",
         python_callable=task_fetch,
-        execution_timeout=timedelta(hours=1),
+        execution_timeout=timedelta(hours=2),
     )
 
     upload_task = PythonOperator(
