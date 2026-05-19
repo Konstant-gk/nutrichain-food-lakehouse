@@ -72,7 +72,7 @@ final AS (
             ),
             256
         ) AS category_key,
-        SHA2(primary_country, 256)  AS country_key,
+        SHA2(country_iso_code, 256) AS country_key,
 
         -- Metadata
         ingest_run_id,

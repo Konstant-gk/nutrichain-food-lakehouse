@@ -4,4 +4,4 @@ select
     sugar_tier
 from {{ source('silver', 'silver_openfood_products') }}
 where sugar_tier is not null
-  and lower(sugar_tier) not in ('low', 'medium', 'high', 'unknown')
+  and sugar_tier not in ('Low', 'Medium', 'High', 'Unknown')

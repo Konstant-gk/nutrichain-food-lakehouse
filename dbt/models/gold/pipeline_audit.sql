@@ -70,16 +70,16 @@ audit AS (
         SUM(CASE WHEN nova_group = 4 THEN 1 ELSE 0 END) AS nova_4_ultra_processed_count,
 
         -- Nutri-Score grade distribution
-        SUM(CASE WHEN nutriscore_grade_reported = 'a' THEN 1 ELSE 0 END) AS grade_a_count,
-        SUM(CASE WHEN nutriscore_grade_reported = 'b' THEN 1 ELSE 0 END) AS grade_b_count,
-        SUM(CASE WHEN nutriscore_grade_reported = 'c' THEN 1 ELSE 0 END) AS grade_c_count,
-        SUM(CASE WHEN nutriscore_grade_reported = 'd' THEN 1 ELSE 0 END) AS grade_d_count,
-        SUM(CASE WHEN nutriscore_grade_reported = 'e' THEN 1 ELSE 0 END) AS grade_e_count,
+        SUM(CASE WHEN nutriscore_grade_reported = 'A' THEN 1 ELSE 0 END) AS grade_a_count,
+        SUM(CASE WHEN nutriscore_grade_reported = 'B' THEN 1 ELSE 0 END) AS grade_b_count,
+        SUM(CASE WHEN nutriscore_grade_reported = 'C' THEN 1 ELSE 0 END) AS grade_c_count,
+        SUM(CASE WHEN nutriscore_grade_reported = 'D' THEN 1 ELSE 0 END) AS grade_d_count,
+        SUM(CASE WHEN nutriscore_grade_reported = 'E' THEN 1 ELSE 0 END) AS grade_e_count,
 
         -- Sugar tier distribution
-        SUM(CASE WHEN sugar_tier = 'low'    THEN 1 ELSE 0 END) AS sugar_low_count,
-        SUM(CASE WHEN sugar_tier = 'medium' THEN 1 ELSE 0 END) AS sugar_medium_count,
-        SUM(CASE WHEN sugar_tier = 'high'   THEN 1 ELSE 0 END) AS sugar_high_count,
+        SUM(CASE WHEN sugar_tier = 'Low'    THEN 1 ELSE 0 END) AS sugar_low_count,
+        SUM(CASE WHEN sugar_tier = 'Medium' THEN 1 ELSE 0 END) AS sugar_medium_count,
+        SUM(CASE WHEN sugar_tier = 'High'   THEN 1 ELSE 0 END) AS sugar_high_count,
 
         CURRENT_TIMESTAMP() AS audit_built_at
 

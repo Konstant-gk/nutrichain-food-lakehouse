@@ -24,10 +24,10 @@ models:
       - name: nova_group
         description: "NOVA food processing group: 1=unprocessed, 4=ultra-processed; null if unclassified."
       - name: data_quality_tier
-        description: "complete when >=3 key fields filled; otherwise sparse."
+        description: "Complete when >=6 of 10 key fields are present and not Unknown; Sparse when 5+ are missing or sentinel."
         tests:
           - accepted_values:
-              values: ['complete', 'sparse']
+              values: ['Complete', 'Sparse']
 
   - name: dim_brand
     description: "Brand dimension — one row per unique brand name."
@@ -49,7 +49,7 @@ models:
           - unique
 
   - name: dim_country
-    description: "Country dimension — one row per unique country."
+    description: "Country dimension — one row per country_iso_code (surrogate key hashes ISO)."
     columns:
       - name: country_key
         tests:
@@ -57,13 +57,13 @@ models:
           - unique
 
   - name: dim_nutriscore
-    description: "Nutri-Score grade lookup — 5 grades A through E plus unknown."
+    description: "Nutri-Score grade lookup — 5 grades A through E plus Unknown."
     columns:
       - name: grade
         tests:
           - not_null
           - accepted_values:
-              values: ['a', 'b', 'c', 'd', 'e', 'unknown']
+              values: ['A', 'B', 'C', 'D', 'E', 'Unknown']
 
   - name: fact_product_nutrition
     description: >
@@ -103,7 +103,11 @@ models:
       - name: sugar_tier
         tests:
           - accepted_values:
-              values: ['low', 'medium', 'high', 'unknown']
+              values: ['Low', 'Medium', 'High', 'Unknown']
+      - name: category_avg_kcal_100g
+        description: "Mean energy_kcal_per_100g in category; only values 0–900 included."
+      - name: category_avg_protein_100g
+        description: "Mean proteins_100g in category; only values 0–100 g/100g included."
       - name: nutriscore_grade_mismatch
         description: "TRUE if reported grade does not match the official formula."
       - name: healthiness_rank_in_category
