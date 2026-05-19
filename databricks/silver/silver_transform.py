@@ -24,7 +24,7 @@ Transformations applied (all documented in docs/data_dictionary.md):
    12. row_hash              — SHA-256 of (barcode + last_modified_t) for dedup
    13. Text cleansing         — product name, allergens, packaging
    14. Nutrition rounding     — 2 dp; negatives → null
-   15. data_quality_tier      — complete vs sparse (completeness score)
+   15. data_quality_tier      — complete (>=6/10 fields) vs sparse (5+ missing/Unknown)
 
 Runs as: Databricks Python file job (same script for every mode).
 
@@ -86,8 +86,12 @@ if str(_SILVER_DIR) not in sys.path:
 
 from silver_cleaning import (  # noqa: E402
     COMPLETENESS_FIELD_NAMES,
+    MAX_KCAL_PER_100G,
+    MAX_MACRO_NUTRIENT_PER_100G,
     reported_grade_for_mismatch,
     spark_clean_category,
+    spark_clamp_energy_kcal,
+    spark_clamp_per_100g,
     spark_clean_off_tag_list,
     spark_clean_product_name,
     spark_completeness_score,
@@ -109,6 +113,16 @@ _NUTRIENT_COLS = (
     "sugars_100g",
     "salt_100g",
     "fiber_100g",
+)
+
+# Re-checked after energy / sodium derivations so bad OFF rows cannot leak through.
+_MACRO_PER_100G_COLS = (
+    "proteins_100g",
+    "fat_100g",
+    "carbohydrates_100g",
+    "sugars_100g",
+    "fiber_100g",
+    "salt_100g",
 )
 
 # Parsed from bronze.raw_products_json. Only fields Silver uses; all STRING so
@@ -291,9 +305,13 @@ def main(args: argparse.Namespace) -> None:
 
     silver_df = flat_df
 
-    # Round nutrients; negative values → null (0 is kept).
+    # Round nutrients; salt/sodium use 2 dp, others 1 dp.
     for nut_col in _NUTRIENT_COLS:
-        silver_df = silver_df.withColumn(nut_col, spark_round_nutrient(F.col(nut_col)))
+        decimals = 2 if nut_col == "salt_100g" else 1
+        silver_df = silver_df.withColumn(
+            nut_col,
+            spark_round_nutrient(F.col(nut_col), decimals=decimals),
+        )
 
     # Text cleansing
     silver_df = silver_df.withColumn("product_name", spark_clean_product_name(F.col("product_name")))
@@ -355,37 +373,36 @@ def main(args: argparse.Namespace) -> None:
         F.trim(F.split(F.col("brands_raw"), ",").getItem(0)),
     )
 
-    # Energy kcal per 100g
-    _MAX_KCAL_PER_100G = 900.0
+    # Energy kcal per 100g (cap at MAX_KCAL_PER_100G; kJ fields converted via ÷ 4.184).
     silver_df = silver_df.withColumn(
         "energy_kcal_per_100g",
         F.when(
             F.col("energy_kcal_raw_100g").isNotNull()
             & (F.col("energy_kcal_raw_100g") > 0)
-            & (F.col("energy_kcal_raw_100g") <= _MAX_KCAL_PER_100G),
+            & (F.col("energy_kcal_raw_100g") <= MAX_KCAL_PER_100G),
             F.col("energy_kcal_raw_100g"),
         )
         .when(
             F.col("energy_raw_100g").isNotNull() & (F.col("energy_raw_100g") > 0),
-            F.round(F.col("energy_raw_100g") / 4.184, 2),
+            F.round(F.col("energy_raw_100g") / 4.184, 1),
         )
         .when(
             F.col("energy_kcal_raw_100g").isNotNull()
-            & (F.col("energy_kcal_raw_100g") > _MAX_KCAL_PER_100G),
-            F.round(F.col("energy_kcal_raw_100g") / 4.184, 2),
+            & (F.col("energy_kcal_raw_100g") > MAX_KCAL_PER_100G),
+            F.round(F.col("energy_kcal_raw_100g") / 4.184, 1),
         )
         .otherwise(F.lit(None).cast("double")),
     )
     silver_df = silver_df.withColumn(
         "energy_kcal_per_100g",
         F.when(
-            F.col("energy_kcal_per_100g").isNotNull()
-            & (
-                (F.col("energy_kcal_per_100g") < 0)
-                | (F.col("energy_kcal_per_100g") > _MAX_KCAL_PER_100G)
-            ),
-            F.lit(None).cast("double"),
-        ).otherwise(F.col("energy_kcal_per_100g")),
+            F.col("energy_kcal_per_100g").isNotNull(),
+            F.round(F.col("energy_kcal_per_100g"), 1),
+        ).otherwise(F.lit(None).cast("double")),
+    )
+    silver_df = silver_df.withColumn(
+        "energy_kcal_per_100g",
+        spark_clamp_energy_kcal(F.col("energy_kcal_per_100g")),
     )
 
     silver_df = silver_df.withColumn(
@@ -398,6 +415,10 @@ def main(args: argparse.Namespace) -> None:
     )
 
     silver_df = silver_df.withColumn(
+        "sodium_raw_100g",
+        spark_round_nutrient(F.col("sodium_raw_100g"), decimals=2),
+    )
+    silver_df = silver_df.withColumn(
         "sodium_corrected_100g",
         F.when(
             F.col("sodium_raw_100g").isNotNull() & (F.col("sodium_raw_100g") > 0),
@@ -407,38 +428,51 @@ def main(args: argparse.Namespace) -> None:
             F.round(F.col("salt_100g") / 2.5, 2),
         ).otherwise(F.lit(None).cast("double")),
     )
+    silver_df = silver_df.withColumn(
+        "sodium_corrected_100g",
+        spark_clamp_per_100g(F.col("sodium_corrected_100g")),
+    )
+
+    # Final per-100g guard after derivations (blocks e.g. proteins_100g = 6139 from OFF).
+    for macro_col in _MACRO_PER_100G_COLS:
+        silver_df = silver_df.withColumn(
+            macro_col,
+            spark_clamp_per_100g(F.col(macro_col)),
+        )
 
     silver_df = silver_df.withColumn(
         "sugar_tier",
-        F.when(F.col("sugars_100g").isNull(), "unknown")
-        .when(F.col("sugars_100g") < 5.0, "low")
-        .when(F.col("sugars_100g") <= 12.5, "medium")
-        .otherwise("high"),
+        F.when(F.col("sugars_100g").isNull(), F.lit("Unknown"))
+        .when(F.col("sugars_100g") < 5.0, "Low")
+        .when(F.col("sugars_100g") <= 12.5, "Medium")
+        .otherwise("High"),
     )
 
     silver_df = silver_df.withColumn(
         "fat_tier",
-        F.when(F.col("fat_100g").isNull(), "unknown")
-        .when(F.col("fat_100g") < 3.0, "low")
-        .when(F.col("fat_100g") <= 17.5, "medium")
-        .otherwise("high"),
+        F.when(F.col("fat_100g").isNull(), F.lit("Unknown"))
+        .when(F.col("fat_100g") < 3.0, "Low")
+        .when(F.col("fat_100g") <= 17.5, "Medium")
+        .otherwise("High"),
     )
 
     silver_df = silver_df.withColumn(
         "salt_tier",
-        F.when(F.col("salt_100g").isNull(), "unknown")
-        .when(F.col("salt_100g") < 0.3, "low")
-        .when(F.col("salt_100g") <= 1.5, "medium")
-        .otherwise("high"),
+        F.when(F.col("salt_100g").isNull(), F.lit("Unknown"))
+        .when(F.col("salt_100g") < 0.3, "Low")
+        .when(F.col("salt_100g") <= 1.5, "Medium")
+        .otherwise("High"),
     )
 
     silver_df = silver_df.withColumn(
         "protein_density_score",
         F.when(
             F.col("energy_kcal_per_100g").isNotNull()
-            & (F.col("energy_kcal_per_100g") > 0)
-            & F.col("proteins_100g").isNotNull(),
-            F.round(F.col("proteins_100g") / F.col("energy_kcal_per_100g") * 100, 2),
+            & (F.col("energy_kcal_per_100g") >= 5)
+            & F.col("proteins_100g").isNotNull()
+            & (F.col("proteins_100g") > 0)
+            & (F.col("proteins_100g") <= 100),
+            F.round(F.col("proteins_100g") / F.col("energy_kcal_per_100g") * 100, 1),
         ).otherwise(F.lit(None).cast("double")),
     )
 
@@ -466,19 +500,19 @@ def main(args: argparse.Namespace) -> None:
 
     silver_df = silver_df.withColumn(
         "nutriscore_grade_recalculated",
-        F.when(F.col("nutriscore_score_raw") <= -1, "a")
-        .when(F.col("nutriscore_score_raw") <= 2, "b")
-        .when(F.col("nutriscore_score_raw") <= 10, "c")
-        .when(F.col("nutriscore_score_raw") <= 18, "d")
-        .when(F.col("nutriscore_score_raw").isNotNull(), "e")
-        .otherwise("unknown"),
+        F.when(F.col("nutriscore_score_raw") <= -1, "A")
+        .when(F.col("nutriscore_score_raw") <= 2, "B")
+        .when(F.col("nutriscore_score_raw") <= 10, "C")
+        .when(F.col("nutriscore_score_raw") <= 18, "D")
+        .when(F.col("nutriscore_score_raw").isNotNull(), "E")
+        .otherwise(F.lit("Unknown")),
     )
 
     silver_df = silver_df.withColumn(
         "nutriscore_grade_mismatch",
         F.when(
             reported_grade_for_mismatch(F.col("nutriscore_grade_reported")).isNotNull()
-            & (F.col("nutriscore_grade_recalculated") != "unknown")
+            & (F.col("nutriscore_grade_recalculated") != "Unknown")
             & (
                 reported_grade_for_mismatch(F.col("nutriscore_grade_reported"))
                 != F.col("nutriscore_grade_recalculated")

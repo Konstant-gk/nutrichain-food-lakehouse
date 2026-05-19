@@ -34,7 +34,20 @@ COMPLETENESS_FIELD_NAMES = (
     "fat_100g",
     "sugars_100g",
 )
-COMPLETENESS_COMPLETE_MIN = 3
+# Sparse when 5+ of the 10 fields above are empty / unknown (score <= 4).
+COMPLETENESS_COMPLETE_MIN = len(COMPLETENESS_FIELD_NAMES) - 4
+
+# Per-100g plausibility caps (Open Food Facts sometimes has unit/field errors).
+MAX_MACRO_NUTRIENT_PER_100G = 100.0
+MAX_KCAL_PER_100G = 900.0
+
+_UNKNOWN_LITERALS = (
+    "unknown",
+    "n/a",
+    "na",
+    "not applicable",
+    "unclassified",
+)
 
 _OFF_LANG_PREFIX = re.compile(r"^([a-z]{2}:)+", re.IGNORECASE)
 _NON_ASCII = re.compile(r"[^\x00-\x7F]")
@@ -121,10 +134,12 @@ def normalize_nutriscore_grade_reported(value: Optional[str]) -> str:
 
 
 def reported_grade_for_mismatch(value: "Column") -> "Column":
+    """Normalize reported grade to A–E for comparison with recalculated grade."""
+    trimmed = F.upper(F.trim(value))
     return (
         F.when(value.isin("Unknown", "Not Applicable"), F.lit(None))
-        .when(value.isin("A", "B", "C", "D", "E"), F.lower(value))
-        .otherwise(F.lower(F.trim(value)))
+        .when(trimmed.isin("A", "B", "C", "D", "E"), trimmed)
+        .otherwise(F.lit(None))
     )
 
 
@@ -189,19 +204,52 @@ def spark_normalize_nutriscore_reported(col: "Column") -> "Column":
     )
 
 
-def spark_round_nutrient(col: "Column") -> "Column":
-    return F.when(col < 0, F.lit(None).cast("double")).otherwise(F.round(col, 2))
+def spark_round_nutrient(
+    col: "Column",
+    max_per_100g: float = MAX_MACRO_NUTRIENT_PER_100G,
+    decimals: int = 1,
+) -> "Column":
+    """Per-100g nutrients: negatives and implausible highs → null (keeps 0)."""
+    return (
+        F.when(col.isNull(), F.lit(None).cast("double"))
+        .when(col < 0, F.lit(None).cast("double"))
+        .when(col > max_per_100g, F.lit(None).cast("double"))
+        .otherwise(F.round(col, decimals))
+    )
+
+
+def spark_clamp_per_100g(col: "Column", max_per_100g: float = MAX_MACRO_NUTRIENT_PER_100G) -> "Column":
+    """Final guard: null out values still above the per-100g cap (after other transforms)."""
+    return (
+        F.when(col.isNull(), F.lit(None).cast("double"))
+        .when((col < 0) | (col > max_per_100g), F.lit(None).cast("double"))
+        .otherwise(col)
+    )
+
+
+def spark_clamp_energy_kcal(col: "Column", max_kcal: float = MAX_KCAL_PER_100G) -> "Column":
+    """Null energy outside 0..max_kcal per 100g."""
+    return (
+        F.when(col.isNull(), F.lit(None).cast("double"))
+        .when((col <= 0) | (col > max_kcal), F.lit(None).cast("double"))
+        .otherwise(col)
+    )
+
+
+def spark_field_is_complete(col: "Column") -> "Column":
+    """Null, blank, or sentinel 'Unknown…' labels do not count toward completeness."""
+    as_string = F.lower(F.trim(col.cast("string")))
+    is_blank = col.isNull() | (F.length(F.trim(col.cast("string"))) == 0)
+    is_unknown = as_string.isin(*_UNKNOWN_LITERALS) | as_string.startswith("unknown ")
+    return F.when(is_blank | is_unknown, 0).otherwise(1)
 
 
 def spark_completeness_score(cols: list["Column"]) -> "Column":
-    filled = [
-        F.when(c.isNotNull() & (F.length(F.trim(c.cast("string"))) > 0), 1).otherwise(0)
-        for c in cols
-    ]
+    filled = [spark_field_is_complete(c) for c in cols]
     return reduce(add, filled)
 
 
 def spark_data_quality_tier(score: "Column") -> "Column":
-    return F.when(score >= COMPLETENESS_COMPLETE_MIN, F.lit("complete")).otherwise(
-        F.lit("sparse")
+    return F.when(score >= COMPLETENESS_COMPLETE_MIN, F.lit("Complete")).otherwise(
+        F.lit("Sparse")
     )
