@@ -1,4 +1,4 @@
--- Fails when sugar_tier is not one of the EU tier labels produced in Silver.
+-- Fails when sugar_tier is not one of the EU tier labels produced in Silver
 select
     barcode,
     sugar_tier

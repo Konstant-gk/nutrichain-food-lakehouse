@@ -140,7 +140,7 @@ final AS (
         nutriscore_key,
         snapshot_date,
 
-        -- ── Degenerate dimensions (useful attributes kept on the fact) ─────
+        -- ── Degenerate dimensions (useful attributes kept on the fact) ────
         barcode                         AS product_id,
         COALESCE(NULLIF(TRIM(CAST(primary_brand AS STRING)), ''), 'Unknown')       AS brand_name,
         COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown') AS category_name,

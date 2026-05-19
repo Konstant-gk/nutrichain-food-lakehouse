@@ -86,6 +86,5 @@ audit AS (
     FROM silver
     GROUP BY ingest_run_id
 )
-
 SELECT * FROM audit
 ORDER BY run_ingested_at DESC

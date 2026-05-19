@@ -373,7 +373,7 @@ def main(args: argparse.Namespace) -> None:
         F.trim(F.split(F.col("brands_raw"), ",").getItem(0)),
     )
 
-    # Energy kcal per 100g (cap at MAX_KCAL_PER_100G; kJ fields converted via ÷ 4.184).
+    # Energy kcal per 100g (cap at MAX_KCAL_PER_100G; kJ fields converted via ÷ 4.184) .
     silver_df = silver_df.withColumn(
         "energy_kcal_per_100g",
         F.when(

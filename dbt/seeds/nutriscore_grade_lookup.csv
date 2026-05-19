@@ -3,5 +3,5 @@ A,-100,-1,Excellent nutritional quality,Green
 B,0,2,Good nutritional quality,Yellow
 C,3,10,Average nutritional quality,Orange
 D,11,18,Poor nutritional quality,Red
-E,19,999,Very poor nutritional quality,Dark red
+E,19,999,Very poor nutritional quality,Dark_red
 Unknown,,,Score not available,Gray

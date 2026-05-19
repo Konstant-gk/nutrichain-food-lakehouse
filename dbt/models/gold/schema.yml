@@ -111,4 +111,4 @@ models:
       - name: nutriscore_grade_mismatch
         description: "TRUE if reported grade does not match the official formula."
       - name: healthiness_rank_in_category
-        description: "Rank 1 = healthiest product in that food category."
+        description: "Rank 1 = healthiest product in that food category ."

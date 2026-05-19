@@ -36,4 +36,4 @@ sources:
               - accepted_values:
                   values: ['Low', 'Medium', 'High', 'Unknown']
           - name: nutriscore_grade_mismatch
-            description: "True if reported grade does not match recalculated grade."
+            description: "True if reported grade does not match recalculated grade. "

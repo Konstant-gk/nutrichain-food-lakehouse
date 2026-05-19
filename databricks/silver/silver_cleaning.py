@@ -3,7 +3,7 @@ silver_cleaning.py
 ------------------
 Text and nutrition cleansing helpers for silver_transform.py (PySpark).
 
-Lives under databricks/silver/ so Databricks jobs do not depend on src/openfood/.
+Lives under databricks/silver/ so Databricks jobs do not depend on src/openfood/ .
 """
 
 from __future__ import annotations
