@@ -58,6 +58,19 @@ Use these to stay aligned with **structure and teaching patterns** the user chos
 
 ---
 
+## Communication contract (non-negotiable for this learner)
+
+When the user is learning, debugging, or says they do not understand:
+
+1. **No terse answers.** Do not compress explanations into one short paragraph or a “summary table only” reply. Write enough that someone with **no prior coding** can follow every step.
+2. **No “summary” sections that replace teaching.** Do not end with “In summary…” or a single recap table instead of the full walkthrough. A review table is allowed **only after** each subconcept was explained in full.
+3. **Exact steps, in order.** Use numbered steps: what to click, what folder to open, what command to type, what file path to expect, what output means. Name **every** relevant subfolder (e.g. `dbt/target/compiled/` vs `dbt/target/run/`).
+4. **What + why for every step.** For each action, state what you are doing and why that action is needed (what breaks if you skip it).
+5. **Simple words first.** Define jargon the first time (e.g. “compiled SQL = the final SELECT dbt sent to Databricks after replacing `{{ ref() }}`”).
+6. **Prefer depth over brevity** unless the user explicitly asks for “short answer only” or `override rules`.
+
+---
+
 ## Coaching loop (project work)
 
 Use unless the user asks to skip:
