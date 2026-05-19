@@ -32,12 +32,12 @@ with_keys AS (
             ),
             256
         ) AS category_key,
-        SHA2(silver.primary_country, 256) AS country_key,
+        SHA2(silver.country_iso_code, 256) AS country_key,
         SHA2(
             CASE
                 WHEN silver.nutriscore_grade_reported IN ('A', 'B', 'C', 'D', 'E')
-                    THEN LOWER(silver.nutriscore_grade_reported)
-                ELSE 'unknown'
+                    THEN silver.nutriscore_grade_reported
+                ELSE 'Unknown'
             END,
             256
         ) AS nutriscore_key,
@@ -57,21 +57,62 @@ with_category_benchmarks AS (
     SELECT
         *,
 
-        -- Average nutrition per category (the benchmark every product is compared to)
-        ROUND(AVG(energy_kcal_per_100g)  OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
-            AS category_avg_kcal_100g,
+        -- Category benchmarks: AVG only over plausible per-100g values (must match Silver caps).
+        ROUND(
+            AVG(
+                CASE
+                    WHEN energy_kcal_per_100g > 0 AND energy_kcal_per_100g <= 900
+                        THEN energy_kcal_per_100g
+                END
+            ) OVER (
+                PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')
+            ),
+            1
+        ) AS category_avg_kcal_100g,
 
-        ROUND(AVG(sugars_100g)  OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
-            AS category_avg_sugar_100g,
+        ROUND(
+            AVG(
+                CASE
+                    WHEN sugars_100g >= 0 AND sugars_100g <= 100 THEN sugars_100g
+                END
+            ) OVER (
+                PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')
+            ),
+            1
+        ) AS category_avg_sugar_100g,
 
-        ROUND(AVG(fat_100g)     OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
-            AS category_avg_fat_100g,
+        ROUND(
+            AVG(
+                CASE
+                    WHEN fat_100g >= 0 AND fat_100g <= 100 THEN fat_100g
+                END
+            ) OVER (
+                PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')
+            ),
+            1
+        ) AS category_avg_fat_100g,
 
-        ROUND(AVG(salt_100g)    OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
-            AS category_avg_salt_100g,
+        ROUND(
+            AVG(
+                CASE
+                    WHEN salt_100g >= 0 AND salt_100g <= 100 THEN salt_100g
+                END
+            ) OVER (
+                PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')
+            ),
+            1
+        ) AS category_avg_salt_100g,
 
-        ROUND(AVG(proteins_100g) OVER (PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')), 2)
-            AS category_avg_protein_100g,
+        ROUND(
+            AVG(
+                CASE
+                    WHEN proteins_100g >= 0 AND proteins_100g <= 100 THEN proteins_100g
+                END
+            ) OVER (
+                PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')
+            ),
+            1
+        ) AS category_avg_protein_100g,
 
         -- Healthiness rank within category
         -- Rank 1 = healthiest (lowest nutriscore = better)
@@ -109,18 +150,18 @@ final AS (
         completeness_score,
         is_nutritional_data_complete,
 
-        -- ── Nutrition measures per 100g ───────────────────────────────────
-        energy_kcal_per_100g,
-        proteins_100g,
-        fat_100g,
-        carbohydrates_100g,
-        sugars_100g,
-        salt_100g,
-        sodium_corrected_100g,
-        fiber_100g,
+        -- ── Nutrition measures per 100g (consistent rounding) ───────────────
+        ROUND(energy_kcal_per_100g, 1)      AS energy_kcal_per_100g,
+        ROUND(proteins_100g, 1)             AS proteins_100g,
+        ROUND(fat_100g, 1)                  AS fat_100g,
+        ROUND(carbohydrates_100g, 1)        AS carbohydrates_100g,
+        ROUND(sugars_100g, 1)               AS sugars_100g,
+        ROUND(salt_100g, 2)                 AS salt_100g,
+        ROUND(sodium_corrected_100g, 2)     AS sodium_corrected_100g,
+        ROUND(fiber_100g, 1)                AS fiber_100g,
 
         -- ── Derived measures ──────────────────────────────────────────────
-        protein_density_score,
+        ROUND(protein_density_score, 1)     AS protein_density_score,
         nutriscore_score_raw,
         ingredient_count,
         nova_group,
@@ -143,10 +184,10 @@ final AS (
         -- 'medium' = protein_density_score >= 5
         -- 'low'    = anything below 5
         CASE
-            WHEN protein_density_score IS NULL THEN 'unknown'
-            WHEN protein_density_score >= 10   THEN 'high'
-            WHEN protein_density_score >= 5    THEN 'medium'
-            ELSE 'low'
+            WHEN protein_density_score IS NULL THEN 'Unknown'
+            WHEN protein_density_score >= 10   THEN 'High'
+            WHEN protein_density_score >= 5    THEN 'Medium'
+            ELSE 'Low'
         END AS protein_density_tier,
 
         -- ── Category benchmark averages ───────────────────────────────────

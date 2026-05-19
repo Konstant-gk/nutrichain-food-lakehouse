@@ -31,9 +31,9 @@ sources:
           - name: sugars_100g
             description: "Sugars per 100g in grams."
           - name: sugar_tier
-            description: "EU traffic-light tier: low, medium, high, or unknown."
+            description: "EU traffic-light tier: low, medium, high, or Unknown when sugars missing."
             tests:
               - accepted_values:
-                  values: ['low', 'medium', 'high', 'unknown']
+                  values: ['Low', 'Medium', 'High', 'Unknown']
           - name: nutriscore_grade_mismatch
             description: "True if reported grade does not match recalculated grade."

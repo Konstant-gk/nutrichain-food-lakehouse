@@ -1,7 +1,7 @@
 grade,score_min,score_max,description,color_indicator
-a,-100,-1,Excellent nutritional quality,green
-b,0,2,Good nutritional quality,yellow
-c,3,10,Average nutritional quality,orange
-d,11,18,Poor nutritional quality,red
-e,19,999,Very poor nutritional quality,dark_red
-unknown,,,Score not available,gray
+A,-100,-1,Excellent nutritional quality,Green
+B,0,2,Good nutritional quality,Yellow
+C,3,10,Average nutritional quality,Orange
+D,11,18,Poor nutritional quality,Red
+E,19,999,Very poor nutritional quality,Dark red
+Unknown,,,Score not available,Gray

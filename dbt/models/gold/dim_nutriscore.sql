@@ -1,6 +1,6 @@
 -- dbt/models/gold/dim_nutriscore.sql
 -- ------------------------------------
--- Purpose: Static Nutri-Score grade lookup (official A–E bands + unknown).
+-- Purpose: Static Nutri-Score grade lookup (official A–E bands + Unknown).
 -- Grain: one row per grade. Data lives in seeds/nutriscore_grade_lookup.csv;
 -- ref() gives dbt a proper DAG edge so tests compile under path:models/gold.
 
