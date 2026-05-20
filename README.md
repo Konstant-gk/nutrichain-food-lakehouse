@@ -1,8 +1,9 @@
 # NutriChain Food Lakehouse
 
-Batch data lakehouse that ingests [Open Food Facts](https://world.openfoodfacts.org/) product data, lands it on Databricks Delta Lake (Bronze → Silver → Gold), and serves analytics in Power BI — orchestrated with Apache Airflow, transformed with PySpark and dbt, and delivered through GitHub Actions.
+End-to-end batch lakehouse on [Open Food Facts](https://world.openfoodfacts.org/): paginated API ingest, Delta Lake medallion layers on Databricks Unity Catalog, a dbt Gold star schema, and Power BI dashboards for pipeline health and monitoring. Orchestrated with Apache Airflow; delivered to Databricks through GitHub Actions and the Repos API.
 
-## Overview
+# Overview
+Portfolio project for **NutriChain Retail Intelligence**: turn crowd-sourced product JSON into typed tables, conformed dimensions, and nutrition facts that category managers can actually use in dashboards.
 
 Open Food Facts exposes millions of product records as a paginated REST API. Analysts need stable tables, deduplicated keys, nutrition facts in typed columns, and a star schema — not raw JSON pages.
 
@@ -17,7 +18,22 @@ NutriChain closes that gap:
 
 Bounded pagination (`OPENFOOD_MAX_PAGES`) and a persisted page offset (`OPENFOOD_PAGINATION_STATE_PATH`) let each scheduled run advance through the catalog instead of re-fetching page 1 every time.
 
-## Architecture
+| Area | What you can review in the repo |
+|------|--------------------------------|
+| Ingestion | Paginated REST client with retries, polite delay, and cross-run page offset |
+| Orchestration | Single Airflow DAG chaining fetch → Volume → Databricks jobs → dbt |
+| Lakehouse | Bronze raw JSON, Silver PySpark cleanse/enrich, Gold dbt models on Delta |
+| Data quality | pytest on Python modules; dbt schema + custom SQL tests on Silver/Gold |
+| Ops / delivery | `pipeline_audit` for run health; CI runs tests and syncs code to Databricks Repos |
+| Consumption | Power BI report wired to Gold (including audit metrics) |
+
+**Stack:** Python 3.12 · Apache Airflow 2.9 · PySpark (Databricks) · Delta Lake · Unity Catalog · dbt 1.8 · GitHub Actions · Power BI
+
+---
+
+## Pipeline flow
+
+Open Food Facts blocks or throttles outbound calls from many hosted Spark environments. External HTTP stays in **Airflow** (Docker on your machine). Databricks reads landed files from a UC Volume and runs Spark + dbt SQL only.
 
 ```
 Open Food Facts API (paginated JSON)
@@ -26,7 +42,7 @@ Open Food Facts API (paginated JSON)
 ┌─────────────────────────────────────────┐
 │  Airflow (Docker Compose, local)      │
 │  DAG: nutrichain_openfood_daily       │
-│  schedule: every 3 hours (UTC)        │
+│  schedule: every 4 hours (UTC)        │
 └─────────────────┬───────────────────────┘
                   │
     fetch → upload → bronze job → silver job → dbt seed/run → dbt test
@@ -41,115 +57,78 @@ Open Food Facts API (paginated JSON)
             Power BI (SQL / Import)
 ```
 
-| Step | Owner | Output |
-|------|--------|--------|
-| `fetch_openfood_pages` | `src/openfood/fetch.py` | JSON under `/tmp/nutrichain_openfood/{run_date}/{batch_id}/` |
-| `upload_to_volume` | `src/openfood/upload.py` | Files on UC Volume `raw_json_landing` |
-| `trigger_bronze_job` | `databricks/bronze/bronze_ingestion.py` | `bronze.bronze_openfood_products_raw` |
-| `trigger_silver_job` | `databricks/silver/silver_transform.py` | `silver.silver_openfood_products` |
-| `run_dbt_gold_models` | `dbt/models/gold/*` | Star schema + `pipeline_audit` |
-| `test_dbt_gold_models` | dbt tests | Silver sources + Gold models |
+**Pagination:** `OPENFOOD_PAGINATION_STATE_PATH` stores the next API page between runs so scheduled jobs advance through the catalog instead of re-pulling page 1. `OPENFOOD_MAX_PAGES` caps work per run (tune for API limits and Databricks cost).
 
-**Why Airflow calls the API:** Databricks Free/serverless often blocks outbound internet. Airflow runs on your machine in Docker; Databricks only reads Volume files and runs Spark/dbt SQL.
+**Delivery:** On push to `main`, GitHub Actions runs `pytest`, then `PATCH /api/2.0/repos/{DATABRICKS_REPO_ID}` so the Git-backed Databricks Repo matches `main`. Job notebooks must live under `/Repos/...`, not legacy `/Shared` imports.
 
-**Delivery:** On merge to `main`, GitHub Actions runs `pytest`, then `PATCH /api/2.0/repos/{DATABRICKS_REPO_ID}` to pull the Git-backed repo in Databricks (no legacy `/Shared` workspace import).
+Architecture diagrams: [docs/architecture/
 
-Diagram sources: [docs/architecture/architecture_openfood_nutrichain_lakehouse.drawio](docs/architecture/architecture_openfood_nutrichain_lakehouse.drawio), [docs/architecture/architecture_nutrichain_lakehouse.jpg](docs/architecture/architecture_nutrichain_lakehouse.jpg).
+---
 
-## Tech stack
-
-| Layer | Tool | Role |
-|-------|------|------|
-| Ingestion | Python 3.12, `requests` | Paginated fetch, retries, polite delay |
-| Config | `src/openfood/config.py` | Required env vars (defaults only in `env.example.txt`) |
-| Orchestration | Apache Airflow 2.9 | DAG, XCom, Databricks job triggers, dbt BashOperators |
-| Storage | Delta Lake (Unity Catalog) | Bronze / Silver / Gold tables |
-| Silver compute | PySpark on Databricks | Dedup, typing, enrichment |
-| Gold compute | dbt-databricks 1.8 | Star schema, seeds, tests |
-| CI | GitHub Actions | `pytest` + Repos sync |
-| BI | Power BI | `powerbi/pipeline-health-dashboard.pbix` |
-
-Pinned versions: root `requirements.txt` (`dbt-core==1.8.8`, `apache-airflow==2.9.0`, etc.).
-
-## Project structure
+## Repository layout
 
 ```
 nutrichain-food-lakehouse/
 ├── airflow/
-│   ├── docker-compose.yml          # Local Airflow + Postgres
+│   ├── docker-compose.yml       # Local Airflow + Postgres + dbt mount
 │   ├── Dockerfile
 │   └── dags/openfood_bronze_dag.py
 ├── src/openfood/
-│   ├── config.py                   # OPENFOOD_* / AIRFLOW_* loaders
-│   ├── fetch.py                    # API client
-│   ├── pagination.py               # Page offset between runs
-│   └── upload.py                   # Volume upload
+│   ├── config.py                # Required env loaders 
+│   ├── fetch.py                 # API client
+│   ├── pagination.py            # Page offset between runs
+│   └── upload.py                # UC Volume upload
 ├── databricks/
 │   ├── bronze/bronze_ingestion.py
-│   ├── silver/silver_transform.py  # Gold is dbt-only (no PySpark gold job)
-│   ├── silver/silver_cleaning.py   # cleansing helpers (same folder as transform)
-│   └── silver/data/country_alias_lookup.csv  # ISO + OFF aliases (Silver runtime)
+│   └── silver/
+│       ├── silver_transform.py  # Incremental MERGE or --backfill_all
+│       ├── silver_cleaning.py   # Casting, dedup, enrichment helpers
+│       └── data/country_alias_lookup.csv
 ├── dbt/
-│   ├── models/gold/                # dims, fact, pipeline_audit
-│   ├── models/silver/              # ephemeral bridge + sources.yml
-│   ├── seeds/                      # nutriscore_grade_lookup.csv only
-│   └── tests/                      # Custom SQL data quality tests
-├── tests/                          # pytest (fetch, upload, pagination)
+│   ├── models/gold/             # dims, fact_product_nutrition, pipeline_audit
+│   ├── models/silver/           # ephemeral bridge + sources.yml
+│   ├── seeds/                   # nutriscore_grade_lookup.csv
+│   └── tests/                   # Custom SQL data-quality tests
+├── tests/                       # pytest (fetch, upload, pagination, silver cleaning)
+├── scripts/
+│   └── generate_country_alias_lookup.py
 ├── powerbi/
-├── docs/architecture/
+│   └── pipeline-health-dashboard.pbix
+├── docs/
+│   ├── architecture/
+│   └── plan/openfood-nutrichain-project-plan.md
 ├── .github/workflows/ci_cd.yml
-├── env.example.txt                 # Copy to .env (gitignored)
+├── env.example.txt              # Copy to .env (gitignored)
 └── requirements.txt
 ```
+
+Gold is **dbt-only** (no PySpark Gold job). Silver is built in Databricks; dbt declares `source('silver', 'silver_openfood_products')` and materializes Gold on top.
+
+---
+
+## Gold data model
+
+Star schema centered on `fact_product_nutrition` (one row per product per snapshot date):
+
+| Model | Role |
+|-------|------|
+| `dim_product` | Product attributes, NOVA group, data quality tier |
+| `dim_brand`, `dim_category`, `dim_country` | Conformed dimensions |
+| `dim_nutriscore` | Grades A–E via seed `nutriscore_grade_lookup` |
+| `fact_product_nutrition` | Nutrition measures per 100g, foreign keys to dims |
+| `pipeline_audit` | Per-`ingest_run_id` volume and quality KPIs for monitoring |
+
+dbt passes `--vars '{"run_date": "<logical date>"}'` from Airflow for snapshot dating on facts.
+
+---
 
 ## Getting started
 
 ### Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- Databricks workspace with Unity Catalog, SQL warehouse, and a **Databricks Repo** linked to this GitHub repo
-- Databricks jobs created for Bronze and Silver notebooks (job IDs in `.env` and Airflow Variables)
-
-### 1. Clone and configure
-
-```bash
-git clone https://github.com/Konstant-gk/nutrichain-food-lakehouse.git
-cd nutrichain-food-lakehouse
-cp env.example.txt .env
-```
-
-Edit `.env` with your Databricks host, token, catalog/schemas, Volume path, Postgres/Airflow admin credentials, and job IDs. All `OPENFOOD_*` and `AIRFLOW_TASK_*` keys are **required** at runtime — there are no hidden Python defaults.
-
-Set Airflow Variables in the UI (Admin → Variables):
-
-- `databricks_bronze_job_id`
-- `databricks_silver_job_id`
-
-Configure the Airflow connection `databricks_default` (host + token).
-
-### 2. Start Airflow
-
-```bash
-cd airflow
-docker compose up --build -d
-```
-
-UI: `http://localhost:8080` (user/password from `AIRFLOW_ADMIN_*` in `.env`).
-
-### 3. Run the pipeline
-
-Enable DAG `nutrichain_openfood_daily`, then trigger a run. Task order:
-
-`fetch_openfood_pages` → `upload_to_volume` → `trigger_bronze_job` → `trigger_silver_job` → `run_dbt_gold_models` → `test_dbt_gold_models`
-
-dbt receives `--vars '{"run_date": "<logical date>"}'` for snapshot dating on Gold facts.
-
-### 4. Unit tests (host or CI)
-
-```bash
-pip install -r requirements.txt
-pytest tests/ --cov=src --cov-report=term-missing -v
-```
+- Docker Desktop
+- Databricks workspace with Unity Catalog, SQL warehouse, and a **Databricks Repo** linked to this GitHub repository
+- Two Databricks jobs (Bronze + Silver notebooks) with IDs stored in `.env` and Airflow Variables
 
 ## Usage
 
@@ -163,105 +142,34 @@ Each successful fetch advances `next_page_start` in `OPENFOOD_PAGINATION_STATE_P
 
 Run from the `dbt/` directory only. Use `dbt/profiles.yml` with `env_var()` for Databricks credentials (file is gitignored; see `dbt/profiles.yml` pattern in repo docs).
 
-```bash
-cd dbt
-dbt seed --profiles-dir .
-dbt run --profiles-dir . --select path:models/gold --vars '{"run_date": "2026-05-15"}'
-dbt test --profiles-dir . --select source:silver path:models/gold
-```
 
-Artifacts: `dbt/logs/dbt.log`, `dbt/target/` (gitignored). For lineage UI, `dbt docs generate` then `dbt docs serve --port 8081` so Airflow can keep port 8080.
-
-Use **dbt-core 1.8.x** from `requirements.txt`, not dbt Fusion 2.x.
-
-### Power BI
-
-Open `powerbi/pipeline-health-dashboard.pbix` and point to Gold tables (including `pipeline_audit` for run-level health metrics).
-
-## Data model (Gold)
-
-Star schema centered on `fact_product_nutrition` (one row per product per snapshot):
-
-| Model | Purpose |
-|-------|---------|
-| `dim_product` | Product attributes, NOVA group |
-| `dim_brand`, `dim_category`, `dim_country` | Conformed dimensions |
-| `dim_nutriscore` | Grade A–E (seed-backed lookup) |
-| `fact_product_nutrition` | Nutrition measures per 100g |
-| `pipeline_audit` | Per-`ingest_run_id` volume and quality KPIs for monitoring |
-
-Silver is **not** rebuilt by dbt; dbt declares `source('silver', 'silver_openfood_products')` and uses an ephemeral model to `ref()` into Gold.
+---
 
 ## Testing and data quality
 
-| Layer | Checks |
-|-------|--------|
-| Python | `tests/test_fetch.py`, `tests/test_upload.py`, `tests/test_pagination.py`, `tests/test_fetch_pagination.py` |
-| dbt schema | `not_null`, `unique`, `relationships`, `accepted_values` on Gold (`dbt/models/gold/schema.yml`) |
-| dbt custom | `dbt/tests/` — e.g. energy kcal range, sugar tier validity, barcode EAN share |
-| CI | `pytest tests/` on every push/PR; Repos sync on `main` after tests pass |
+| Layer | Coverage |
+|-------|----------|
+| Python | `tests/test_fetch.py`, `test_upload.py`, `test_pagination.py`, `test_fetch_pagination.py`, `test_silver_cleaning.py` |
+| dbt schema | `not_null`, `unique`, `relationships`, `accepted_values` on Gold (`dbt/models/gold/schema.yml`) and Silver source (`dbt/models/silver/sources.yml`) |
+| dbt custom | `dbt/tests/` — energy kcal ranges, sugar tier validity, barcode EAN share, category benchmark bounds, etc. |
+| CI | `pytest` on every push/PR; Repos sync on `main` after tests pass ([`.github/workflows/ci_cd.yml`](.github/workflows/ci_cd.yml)) |
 
-## Deployment (CI/CD)
-
+GitHub Actions secrets for delivery: `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_REPO_ID`.
 Workflow: [.github/workflows/ci_cd.yml](.github/workflows/ci_cd.yml)
 
-1. **test** — Python 3.12, `pip install -r requirements.txt`, `pytest` with coverage on `src/`
-2. **databricks_delivery** ( `main` only ) — `PATCH` Repos API with branch `main`
-
-GitHub Actions secrets: `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_REPO_ID`.
-
-Databricks jobs must reference notebook paths under your **Repos** mount (e.g. `/Repos/<user>/nutrichain-food-lakehouse/databricks/bronze/...`), not `/Shared/...`.
-
-## Backfill after Silver or Gold schema changes
-
-A normal DAG run only processes **one** `ingest_run_id` in Bronze and **MERGE**s into Silver. Older products keep old column values until they appear in a new batch. After adding cleansing columns or country lookup logic, run a **one-time full Silver rebuild**, then rebuild Gold and refresh Power BI.
-
-| Step | Where | Action |
-|------|--------|--------|
-| 1 | GitHub `main` | Push code; wait for CI Repos sync (or Pull in Databricks Repos UI). |
-| 2 | Databricks | Run Silver job with **`--backfill_all`** (no `run_id`). Overwrites `silver.silver_openfood_products` from **all** Bronze history; dedupes by `barcode` (latest `last_modified_unix` wins). |
-| 3 | Airflow or dbt CLI | `dbt run --select path:models/gold` then `dbt test` (Airflow tasks `run_dbt_gold_models` / `test_dbt_gold_models`). |
-| 4 | Power BI | Refresh the dataset / report. |
-
-**Databricks job parameters (maintenance run):**
-
-```text
---backfill_all
---catalog nutrichain_lakehouse
---bronze_schema bronze
---silver_schema silver
---bronze_table bronze_openfood_products_raw
---silver_table silver_openfood_products
-```
-
-(Omit `--run_id` when `backfill_all` is set.)
-
-**Incremental runs (Airflow):** keep passing `--run_id` from the fetch task; do **not** set `--backfill_all`.
-
-**Country aliases:** edit `databricks/silver/data/country_alias_lookup.csv`, sync repo, re-run backfill (or wait for products to reappear in incremental MERGE). To find unmapped countries after backfill:
-
-```sql
-SELECT primary_country, country_iso_code, COUNT(*) AS n
-FROM nutrichain_lakehouse.silver.silver_openfood_products
-WHERE primary_country = 'Unknown Country'
-GROUP BY 1, 2
-ORDER BY n DESC
-LIMIT 50;
-```
-
-Add rows to the CSV (`alias,iso_code,display_name`), sync, and backfill again.
+---
 
 ## Documentation
 
 | Path | Contents |
 |------|----------|
-| [docs/architecture/](docs/architecture/) | Draw.io and diagram assets for the lakehouse |
-| [docs/plan/openfood-nutrichain-project-plan.md](docs/plan/openfood-nutrichain-project-plan.md) | Portfolio project plan (company story, architecture, layers, success metrics) |
-| `env.example.txt` | Full list of environment variables |
+| [docs/plan/openfood-nutrichain-project-plan.md](docs/plan/openfood-nutrichain-project-plan.md) | Business context, layer design, success metrics |
+| [docs/architecture/](docs/architecture/) | Draw.io source and exported diagram |
+| `env.example.txt` | Full environment variable list |
 
-Local explanation guides under `docs/explanation/` may exist on disk but are gitignored in this repo.
+---
 
-## Success criteria
+## Verifications
 
 | Check | Expected |
 |-------|----------|
@@ -276,7 +184,6 @@ Local explanation guides under `docs/explanation/` may exist on disk but are git
 - **Bounded ingest:** `OPENFOOD_MAX_PAGES` limits pages per run; use `--backfill_all` on Silver to re-apply cleansing to all Bronze already loaded.
 - **API etiquette:** Set `OPENFOOD_USER_AGENT` with contact info; tune `OPENFOOD_POLITE_DELAY_SECONDS` for rate limits.
 - **Databricks Free tier:** Fair-use compute; larger page counts increase runtime and cost.
-- **Secrets:** Never commit `.env` or `dbt/profiles.yml`; use Databricks secrets or GitHub Actions secrets in automation.
 
 ## License
 
