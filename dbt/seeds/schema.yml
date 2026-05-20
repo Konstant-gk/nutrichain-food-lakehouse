@@ -1,0 +1,19 @@
+# dbt/seeds/schema.yml
+# Tests and docs for CSV seeds (loaded with: dbt seed)
+
+version: 2
+
+seeds:
+  - name: nutriscore_grade_lookup
+    description: "Official Nutri-Score grade bands (A–E) plus Unknown. Loaded into gold.nutriscore_grade_lookup."
+    columns:
+      - name: grade
+        description: "Single-letter grade or Unknown when score is missing."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['A', 'B', 'C', 'D', 'E', 'Unknown']
+      - name: score_min
+        description: "Inclusive lower bound of the numeric Nutri-Score (null for Unknown)."
+      - name: score_max
+        description: "Inclusive upper bound of the numeric Nutri-Score (null for Unknown)."

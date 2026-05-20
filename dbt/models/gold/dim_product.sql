@@ -10,8 +10,7 @@ WITH source AS (
 ),
 
 deduped AS (
-    -- Keep only the most recently modified version of each barcode
-    -- In case the same product appears with updated data
+    -- Same barcode can appear on multiple ingest runs; keep newest.
     SELECT *,
         ROW_NUMBER() OVER (
             PARTITION BY barcode
@@ -23,9 +22,6 @@ deduped AS (
 final AS (
     SELECT
         -- Surrogate key: SHA-256 hash of barcode
-        -- We use a hash instead of an integer sequence because:
-        -- a) it's deterministic (same barcode always = same key)
-        -- b) it works across parallel runs without a sequence generator
         SHA2(barcode, 256)          AS product_key,
 
         -- Natural / business key
@@ -57,7 +53,7 @@ final AS (
         nutriscore_grade_recalculated,
         nutriscore_grade_mismatch,
 
-        -- Foreign keys to other dims (sha2 of natural key = same as in dim tables)
+        -- Same SHA2 rules as dim_brand / dim_category / dim_country.
         SHA2(
             COALESCE(
                 NULLIF(TRIM(CAST(primary_brand AS STRING)), ''),

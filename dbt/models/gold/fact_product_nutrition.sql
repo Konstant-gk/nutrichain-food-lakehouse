@@ -116,7 +116,7 @@ with_category_benchmarks AS (
 
         -- Healthiness rank within category
         -- Rank 1 = healthiest (lowest nutriscore = better)
-        -- Analysts use this to answer: "Is our product in the top 10% of its category?"
+        
         RANK() OVER (
             PARTITION BY COALESCE(NULLIF(TRIM(CAST(primary_category AS STRING)), ''), 'Unknown')
             ORDER BY nutriscore_score_raw ASC NULLS LAST
@@ -198,8 +198,6 @@ final AS (
         category_avg_protein_100g,
 
         -- ── Above/below category average flags ────────────────────────────
-        -- These are the "is this product worse than its peers?" flags
-        -- Power BI uses these as filter conditions: "show me all products above avg"
         CASE
             WHEN sugars_100g IS NULL OR category_avg_sugar_100g IS NULL THEN 'Unknown'
             WHEN sugars_100g > category_avg_sugar_100g THEN 'Yes'

@@ -3,6 +3,8 @@
 -- Purpose: Country dimension — one row per ISO code.
 -- country_key hashes country_iso_code (not display name) so one label cannot
 -- appear under multiple ISO codes and collide on the same surrogate key.
+-- Gold dim: one row per country_iso_code (key is SHA2(iso), not display name).
+
 
 WITH per_iso AS (
     SELECT

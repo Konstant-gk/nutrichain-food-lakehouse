@@ -2,12 +2,8 @@
 -- -----------------------------------------------
 -- PySpark (`silver_transform.py`) is the ONLY writer to the Delta table
 -- `source('silver', 'silver_openfood_products')`. dbt does not rebuild Silver.
---
--- This model is **ephemeral** (`dbt_project.yml` → `silver:`): compiled as an inlined
--- CTE inside Gold models — no second physical Silver table.
---
--- Alternative pattern some teams use: Gold calls source() directly and deletes
--- this file. We keep one ephemeral "bridge" so all Gold models depend on one node.
+-- Ephemeral bridge to Silver Delta (written only by silver_transform.py).
+-- Inlined into Gold models; avoids duplicating source() in every dim/fact file.
 
 SELECT
     -- Identity
