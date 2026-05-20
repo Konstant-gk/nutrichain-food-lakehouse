@@ -52,7 +52,7 @@ from pyspark.sql.window import Window
 
 
 def _coerce_bool(value: object) -> bool:
-    """Parse CLI / Databricks job flags (true, 1, yes) and store_true."""
+    """Parse job flag strings (true/1/yes/on) for ``--backfill_all``."""
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in ("1", "true", "yes", "on")
@@ -63,7 +63,6 @@ def _silver_module_dir() -> Path:
     try:
         return Path(__file__).resolve().parent
     except NameError:
-        # Databricks file tasks exec() the script without defining __file__.
         cwd = Path.cwd()
         candidates: list[Path] = [
             cwd,
@@ -115,7 +114,7 @@ _NUTRIENT_COLS = (
     "fiber_100g",
 )
 
-# Re-checked after energy / sodium derivations so bad OFF rows cannot leak through.
+# Second pass after derived energy/sodium columns.
 _MACRO_PER_100G_COLS = (
     "proteins_100g",
     "fat_100g",
@@ -125,8 +124,7 @@ _MACRO_PER_100G_COLS = (
     "salt_100g",
 )
 
-# Parsed from bronze.raw_products_json. Only fields Silver uses; all STRING so
-# new OFF top-level keys and nested blobs (e.g. nutriments) do not break parsing.
+# Fixed struct for from_json; extra OFF keys are ignored, nested blobs stay in JSON.
 _RAW_PRODUCTS_SCHEMA = (
     "array<struct<"
     "code:string,product_name:string,brands:string,categories:string,countries:string,"
@@ -305,7 +303,6 @@ def main(args: argparse.Namespace) -> None:
 
     silver_df = flat_df
 
-    # Round nutrients; salt/sodium use 2 dp, others 1 dp.
     for nut_col in _NUTRIENT_COLS:
         decimals = 2 if nut_col == "salt_100g" else 1
         silver_df = silver_df.withColumn(
@@ -313,7 +310,6 @@ def main(args: argparse.Namespace) -> None:
             spark_round_nutrient(F.col(nut_col), decimals=decimals),
         )
 
-    # Text cleansing
     silver_df = silver_df.withColumn("product_name", spark_clean_product_name(F.col("product_name")))
     silver_df = silver_df.withColumn("allergens", spark_clean_off_tag_list(F.col("allergens")))
     silver_df = silver_df.withColumn("packaging", spark_clean_off_tag_list(F.col("packaging")))
@@ -373,7 +369,7 @@ def main(args: argparse.Namespace) -> None:
         F.trim(F.split(F.col("brands_raw"), ",").getItem(0)),
     )
 
-    # Energy kcal per 100g (cap at MAX_KCAL_PER_100G; kJ fields converted via ÷ 4.184) .
+    # Prefer explicit kcal; else convert kJ with 4.184; cap implausible values.
     silver_df = silver_df.withColumn(
         "energy_kcal_per_100g",
         F.when(
@@ -433,7 +429,6 @@ def main(args: argparse.Namespace) -> None:
         spark_clamp_per_100g(F.col("sodium_corrected_100g")),
     )
 
-    # Final per-100g guard after derivations (blocks e.g. proteins_100g = 6139 from OFF).
     for macro_col in _MACRO_PER_100G_COLS:
         silver_df = silver_df.withColumn(
             macro_col,

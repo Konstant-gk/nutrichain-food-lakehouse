@@ -1,4 +1,4 @@
-"""Unit tests for silver completeness rules (no Spark required)."""
+"""Silver completeness thresholds (pure Python constants, no Spark)."""
 
 from databricks.silver.silver_cleaning import (
     COMPLETENESS_COMPLETE_MIN,
@@ -13,7 +13,7 @@ def test_completeness_field_count():
 
 
 def test_sparse_when_five_or_more_fields_missing():
-    # 5+ missing → score <= 4 → sparse; complete needs score >= 6.
+    # Sparse when score <= 4; complete when score >= 6.
     assert COMPLETENESS_COMPLETE_MIN == 6
 
 

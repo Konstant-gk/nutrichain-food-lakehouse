@@ -3,7 +3,9 @@ silver_cleaning.py
 ------------------
 Text and nutrition cleansing helpers for silver_transform.py (PySpark).
 
-Lives under databricks/silver/ so Databricks jobs do not depend on src/openfood/ .
+Shared cleansing rules for Silver (Python helpers + PySpark column expressions).
+
+Used by ``silver_transform.py``. Pure-Python functions support unit tests;
 """
 
 from __future__ import annotations
@@ -34,10 +36,10 @@ COMPLETENESS_FIELD_NAMES = (
     "fat_100g",
     "sugars_100g",
 )
-# Sparse when 5+ of the 10 fields above are empty / unknown (score <= 4).
+# Complete tier needs score >= 6 (at most 4 of 10 fields empty/unknown).
 COMPLETENESS_COMPLETE_MIN = len(COMPLETENESS_FIELD_NAMES) - 4
 
-# Per-100g plausibility caps (Open Food Facts sometimes has unit/field errors).
+# Null out impossible per-100g values from bad OFF units.
 MAX_MACRO_NUTRIENT_PER_100G = 100.0
 MAX_KCAL_PER_100G = 900.0
 
@@ -134,7 +136,7 @@ def normalize_nutriscore_grade_reported(value: Optional[str]) -> str:
 
 
 def reported_grade_for_mismatch(value: "Column") -> "Column":
-    """Normalize reported grade to A–E for comparison with recalculated grade."""
+    """Map reported grade to A–E only (Unknown / N/A → null for mismatch check)."""
     trimmed = F.upper(F.trim(value))
     return (
         F.when(value.isin("Unknown", "Not Applicable"), F.lit(None))

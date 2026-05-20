@@ -26,7 +26,7 @@ from pyspark.sql import functions as F
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Stable Bronze contract: string JSON for products, no inferred struct column.
+# Fixed write schema; Silver parses raw_products_json with its own struct definition.
 BRONZE_WRITE_COLUMNS = (
     "ingest_run_id",
     "ingest_layer",
@@ -43,12 +43,7 @@ BRONZE_WRITE_COLUMNS = (
 
 
 def _migrate_legacy_bronze_schema(spark: SparkSession, bronze_table: str) -> None:
-    """
-    Remove legacy `products` struct column (fixes DELTA_METADATA_MISMATCH on append).
-
-    Uses CREATE OR REPLACE + EXCEPT — works without delta.columnMapping (DROP COLUMN
-  does not on many UC / Free workspaces).
-    """
+    """Drop legacy ``products`` struct via CREATE OR REPLACE (DROP COLUMN often blocked on UC)."""
     if not spark.catalog.tableExists(bronze_table):
         return
     column_names = {f.name for f in spark.table(bronze_table).schema.fields}
@@ -65,7 +60,7 @@ def _migrate_legacy_bronze_schema(spark: SparkSession, bronze_table: str) -> Non
 
 
 def _align_to_write_schema(bronze_df, run_id: str):
-    """Project to the canonical Bronze columns (add nulls for any missing fields)."""
+    """Select BRONZE_WRITE_COLUMNS; fill missing columns with null."""
     df = bronze_df
     if "api_page_number" not in df.columns and "page_number" in df.columns:
         df = df.withColumn("api_page_number", F.col("page_number"))
@@ -113,7 +108,6 @@ def main(args: argparse.Namespace) -> None:
     table = args.table.strip()
 
     bronze_table = f"{catalog}.{schema}.{table}"
-    # Volume path must match what upload.py wrote to: {date}/{batch_id}/
     volume_input = (
         f"/Volumes/{catalog}/{schema}/raw_json_landing/{run_date}/{run_id}/"
     )
@@ -125,8 +119,7 @@ def main(args: argparse.Namespace) -> None:
 
     spark = SparkSession.builder.appName("bronze_openfood_ingestion").getOrCreate()
 
-    # Read all JSON files from this run's Volume subfolder
-    # multiLine=true because each file is a single large JSON object, not JSONL
+    # One JSON object per file (not JSONL).
     raw_df = spark.read.option("multiLine", "true").json(volume_input)
 
     row_count = raw_df.count()
@@ -137,11 +130,7 @@ def main(args: argparse.Namespace) -> None:
         )
     logger.info("Read %d page-level records from Volume.", row_count)
 
-    # Bronze adds lineage metadata and one string column for all product payloads.
-    # Do NOT persist inferred struct/array column "products" on append: Open Food
-    # Facts evolves nested fields between pages/runs → Delta schema merge fails with
-    # DELTA_FAILED_TO_MERGE_FIELDS on "products". raw_products_json is stable (string).
-    # Silver parses this JSON with a fixed array<struct<...>> schema (see silver_transform).
+     # Serialize products array to string; inferred struct column breaks append over time.
     bronze_df = (
         raw_df
         .withColumn("ingest_layer", F.lit("bronze"))

@@ -15,11 +15,6 @@ Task order:
     4. trigger_silver_job      — Bronze Delta → Silver Delta (cleaned + enriched)
     5. run_dbt_gold_models     — dbt builds Gold Delta (single owner; no PySpark gold job)
 
-WHY AIRFLOW DOES THE API FETCH (not Databricks):
-    Databricks Free Edition restricts outbound internet from serverless compute.
-    Airflow runs inside Docker on your local machine — no internet restrictions.
-    Rule: all external API calls happen in Airflow. Databricks only transforms.
-
 Volume layout (per batch):
     /Volumes/.../raw_json_landing/{run_date}/{batch_id}/*.json
 
@@ -72,10 +67,7 @@ def _batch_ids_from_context(context: dict) -> tuple[str, str]:
 
 
 def task_fetch(**context) -> dict:
-    """
-    Task 1: Call Open Food Facts API and save JSON pages to /tmp/ on Airflow host.
-    Returns summary dict → pushed to XCom automatically for downstream tasks.
-    """
+    """Fetch OFF pages to ``/tmp/nutrichain_openfood/{run_date}/{batch_id}/``; return XCom summary."""
     run_date, batch_id = _batch_ids_from_context(context)
     fetch_settings = load_openfood_fetch_settings()
     logger.info(
@@ -95,10 +87,7 @@ def task_fetch(**context) -> dict:
 
 
 def task_upload(**context) -> list:
-    """
-    Task 2: Upload local JSON files from /tmp/ to Databricks UC Volume.
-    Reads run_id, run_date, and output_dir from XCom (set by task_fetch).
-    """
+    """PUT fetch JSON to the Volume; paths from fetch task XCom."""
     task_instance = context["task_instance"]
     metadata = task_instance.xcom_pull(task_ids="fetch_openfood_pages")
 
@@ -128,9 +117,9 @@ with DAG(
     ),
     default_args=default_args,
     start_date=datetime(2025, 1, 1),
-    schedule_interval="0 */4 * * *",  # Every 4 hours at minute 0 (UTC)
-    catchup=False,  # Do not backfill missed ticks while Airflow was down
-    max_active_runs=1,  # Only one full pipeline at a time (avoids pile-up on wake)
+    schedule_interval="0 */4 * * *",
+    catchup=False,
+    max_active_runs=1,
     tags=["nutrichain", "bronze", "silver", "gold", "openfood", "ingestion"],
 ) as dag:
 

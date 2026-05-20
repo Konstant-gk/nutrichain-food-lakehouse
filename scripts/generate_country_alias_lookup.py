@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Generate country_alias_lookup.csv from ISO 3166-1 (English) + common OFF aliases.
+"""Build country_alias_lookup.csv for Silver joins and dbt seeds.
 
 Writes:
   - databricks/silver/data/country_alias_lookup.csv  (Silver PySpark join)
