@@ -4,15 +4,11 @@ upload.py
 Purpose : Upload local JSON files from a run directory to a Databricks
           Unity Catalog Volume using the Files API.
 
-Company context:
-    NutriChain Retail Intelligence — uploads Open Food Facts product JSON
-    files from Airflow's local /tmp/ directory to the Databricks landing zone
-    so Spark jobs can read them from the Volume.
+Pipeline step: ``upload_to_volume`` reads XCom paths from fetch, then PUTs each file
+via the Databricks Files API to
+``{volume_base}/{run_date}/{run_id}/*.json`` (bronze job reads the same layout).
 
-Prerequisites:
-    DATABRICKS_HOST  — e.g. https://adb-xxxx.azuredatabricks.net
-    DATABRICKS_TOKEN — Databricks personal access token
-    A UC Volume must exist at /Volumes/nutrichain_lakehouse/bronze/raw_json_landing/
+Needs DATABRICKS_HOST, DATABRICKS_TOKEN, and DATABRICKS_VOLUME_PATH in .env.
 """
 
 from __future__ import annotations
@@ -140,16 +136,12 @@ def upload_run_to_volume(
     run_id: str,
     run_date: str | None = None,
 ) -> list[str]:
-    """
-    Upload all JSON files from a local run directory to a Databricks UC Volume.
-
-    Layout: ``{volume_base}/{run_date}/{run_id}/*.json`` so multiple batches per
-    calendar day do not overwrite each other.
+    """Upload every ``*.json`` in ``local_dir`` under ``{volume_base}/{run_date}/{run_id}/``.
 
     Args:
-        local_dir : Local directory containing the JSON files for this run.
-        run_id    : Batch id (e.g. YYYYMMDD_HH00).
-        run_date  : Calendar date folder (YYYYMMDD). Defaults to first 8 chars of run_id.
+        local_dir: Fetch output directory from XCom.
+        run_id: Batch id (folder name under run_date).
+        run_date: YYYYMMDD partition; defaults to first 8 chars of run_id.
 
     Returns:
         List of Volume paths that were successfully uploaded.

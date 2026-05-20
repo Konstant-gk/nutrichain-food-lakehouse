@@ -3,8 +3,8 @@ config.py
 ---------
 Read Open Food Facts ingest and Airflow task settings from environment variables.
 
-Documented defaults live in env.example.txt at the repo root — not in Python constants,
-so dev/staging/prod cannot drift from two different hardcoded fallbacks.
+Required keys are validated at read time (no silent defaults in code).
+See env.example.txt for names and documented values.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 
 class OpenFoodConfigError(ValueError):
-    """Raised when a required OPENFOOD_* or AIRFLOW_* env var is missing or invalid."""
+    """Missing or invalid OPENFOOD_* / AIRFLOW_* environment variable."""
 
 
 def _require_raw(name: str) -> str:
@@ -74,7 +74,7 @@ class AirflowTaskDefaults:
 
 
 def load_openfood_fetch_settings() -> OpenFoodFetchSettings:
-    """Load OPENFOOD_* fetch tuning from the environment."""
+    """Return page size, max pages, polite delay, and per-page retry limit."""
     return OpenFoodFetchSettings(
         max_pages=_require_positive_int("OPENFOOD_MAX_PAGES"),
         records_per_page=_require_positive_int("OPENFOOD_RECORDS_PER_PAGE"),
@@ -84,7 +84,7 @@ def load_openfood_fetch_settings() -> OpenFoodFetchSettings:
 
 
 def load_airflow_task_defaults() -> AirflowTaskDefaults:
-    """Load Airflow default_args retry settings from the environment."""
+    """Return task retry count and delay for the Airflow DAG default_args."""
     return AirflowTaskDefaults(
         retries=_require_non_negative_int("AIRFLOW_TASK_RETRIES"),
         retry_delay_seconds=_require_positive_int("AIRFLOW_TASK_RETRY_DELAY_SECONDS"),

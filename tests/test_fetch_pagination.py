@@ -1,4 +1,4 @@
-"""Integration-style tests for fetch pagination advancement."""
+"""After a full batch, global next_page_start moves past batch_page_end."""
 
 import os
 import tempfile

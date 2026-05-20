@@ -1,10 +1,11 @@
-"""Pytest fixtures — test-only env values (production defaults live in env.example.txt)."""
+"""Shared pytest fixtures for offline ingest tests."""
 
 import os
 
 import pytest
 
-# Values mirror env.example.txt; tests stay fast and offline.
+# Small page counts and zero delay; mirrors env.example.txt keys, not production values.
+
 _TEST_OPENFOOD_ENV = {
     "OPENFOOD_MAX_PAGES": "10",
     "OPENFOOD_RECORDS_PER_PAGE": "10",

@@ -41,10 +41,10 @@ class TestGetFilesApiCredentials:
 
 
 class TestUploadRunToVolume:
-    """Test the main upload orchestration function."""
+    """upload_run_to_volume paths and HTTP behaviour."""
 
     def _write_fake_json_file(self, folder: str, filename: str, content: dict):
-        """Helper: write a small JSON file to a temp folder."""
+        """Write one JSON file under a temp directory."""
         filepath = os.path.join(folder, filename)
         with open(filepath, "w") as f:
             json.dump(content, f)

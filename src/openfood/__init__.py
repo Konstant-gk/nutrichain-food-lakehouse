@@ -1,2 +1,1 @@
-# This file marks src/openfood/ as a Python package.
-# It intentionally contains no code.
+"""Open Food Facts ingest package: config, fetch, pagination, Volume upload."""

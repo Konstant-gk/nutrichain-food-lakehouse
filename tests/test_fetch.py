@@ -14,9 +14,19 @@ import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from src.openfood.config import load_openfood_fetch_settings
 from src.openfood.fetch import _DEFAULT_USER_AGENT, fetch_all_pages
+
+
+def _page_json_files(tmp_dir: str) -> list[str]:
+    """List ``run_*_page_*.json`` only (not checkpoint sidecar)."""
+    return sorted(
+        name
+        for name in os.listdir(tmp_dir)
+        if name.startswith("run_") and name.endswith(".json")
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -96,7 +106,7 @@ class TestFetchAllPages:
                 ]
                 summary = fetch_all_pages(output_dir=tmp_dir, run_id="20250420")
 
-            files = os.listdir(tmp_dir)
+            files = _page_json_files(tmp_dir)
             assert len(files) == 1
             assert summary["pages_fetched"] == 1
             assert summary["records_total"] == 1
@@ -112,7 +122,7 @@ class TestFetchAllPages:
                 ]
                 fetch_all_pages(output_dir=tmp_dir, run_id="metarun")
 
-            saved_file = sorted(os.listdir(tmp_dir))[0]
+            saved_file = _page_json_files(tmp_dir)[0]
             with open(os.path.join(tmp_dir, saved_file), encoding="utf-8") as f:
                 content = json.load(f)
 
@@ -132,7 +142,7 @@ class TestFetchAllPages:
 
             assert summary["pages_fetched"] == 0
             assert summary["records_total"] == 0
-            assert len(os.listdir(tmp_dir)) == 0
+            assert len(_page_json_files(tmp_dir)) == 0
 
     def test_run_id_appears_in_filename(self):
         """run_id must appear in the filename for traceability."""
@@ -144,7 +154,7 @@ class TestFetchAllPages:
                 ]
                 fetch_all_pages(output_dir=tmp_dir, run_id="uniquerun999")
 
-            filenames = os.listdir(tmp_dir)
+            filenames = _page_json_files(tmp_dir)
             assert "uniquerun999" in filenames[0]
 
     def test_fetches_multiple_pages(self):
@@ -164,7 +174,7 @@ class TestFetchAllPages:
 
                 assert summary["pages_fetched"] == 3
                 assert summary["records_total"] == records_per_page * 3
-                assert len(os.listdir(tmp_dir)) == 3
+                assert len(_page_json_files(tmp_dir)) == 3
 
     def test_rate_limit_retries(self):
         """429 on first attempt should retry and succeed on second attempt."""
@@ -179,6 +189,35 @@ class TestFetchAllPages:
                 summary = fetch_all_pages(output_dir=tmp_dir, run_id="retrytest")
 
             assert summary["pages_fetched"] == 1
+
+    def test_connection_error_retries(self):
+        """Dropped connection on first attempt should retry and succeed on second."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("src.openfood.fetch.requests.get") as mock_get:
+                mock_get.side_effect = [
+                    requests.exceptions.ConnectionError(
+                        "Remote end closed connection without response"
+                    ),
+                    make_fake_response([make_fake_product()]),
+                    make_fake_response([]),
+                ]
+                summary = fetch_all_pages(output_dir=tmp_dir, run_id="conntest")
+
+            assert summary["pages_fetched"] == 1
+            assert mock_get.call_count == 3
+
+    def test_connection_error_raises_after_max_retries(self):
+        """ConnectionError on every attempt should fail with RuntimeError."""
+        with patch.dict(os.environ, {"OPENFOOD_PAGE_MAX_RETRIES": "3"}):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch("src.openfood.fetch.requests.get") as mock_get:
+                    mock_get.side_effect = requests.exceptions.ConnectionError(
+                        "connection aborted"
+                    )
+                    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+                        fetch_all_pages(output_dir=tmp_dir, run_id="connfail")
+
+                assert mock_get.call_count == 3
 
     def test_opens_with_user_agent_from_env_when_set(self):
         """OPENFOOD_USER_AGENT must be sent so OFF does not return 403."""

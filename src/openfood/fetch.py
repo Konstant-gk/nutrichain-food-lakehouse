@@ -6,21 +6,8 @@ Purpose  : Fetch food product pages from the Open Food Facts REST API
 
 Data flow: Open Food Facts API → requests.get() → local .json file per page
 
-Company context:
-    NutriChain Retail Intelligence ingests product nutrition data from
-    Open Food Facts to power category health reports for supermarket clients.
-
-Why this file is separate from the DAG:
-    Pure Python with no Airflow dependency. pytest can import and test
-    this module without Docker or Airflow running. The DAG is a thin wrapper.
-
-How to run manually:
-    python -m src.openfood.fetch
-
-Prerequisites:
-    No API key required. Open Food Facts is fully public.
-    Set OPENFOOD_* vars in .env (see env.example.txt): MAX_PAGES, RECORDS_PER_PAGE,
-    POLITE_DELAY_SECONDS, PAGE_MAX_RETRIES, USER_AGENT.
+Run locally: ``python -m src.openfood.fetch`` (OPENFOOD_* in .env; no API key).
+Kept outside the DAG so pytest can mock ``requests`` without Airflow.
 """
 
 import json
@@ -34,22 +21,31 @@ from pathlib import Path
 import requests
 
 from .config import load_openfood_fetch_settings
-from .pagination import load_next_page_start, save_next_page_start
+from .pagination import (
+    load_next_page_start,
+    resolve_fetch_window,
+    save_next_page_start,
+    save_run_checkpoint,
+)
 
 logger = logging.getLogger(__name__)
 
-# Open Food Facts v2 search API
-# This is the stable modern endpoint — cgi/search.pl is the legacy one
+# v2 search endpoint (cgi/search.pl is legacy).
 BASE_URL = "https://world.openfoodfacts.org/api/v2/search"
 
-# Status codes that mean "server is busy, try again later"
-# 429 = rate limited, 503 = temporarily unavailable, 502 = bad gateway
+# Retry these before failing the page (429 rate limit, 5xx upstream).
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
-# Cap 503 backoff so Airflow workers keep heartbeating (long sleep → zombie/SIGTERM).
+# TCP drops and timeouts before any HTTP status (e.g. RemoteDisconnected).
+_TRANSIENT_NETWORK_ERRORS = (
+    requests.exceptions.Timeout,
+    requests.exceptions.ConnectionError,
+)
+
+# Cap backoff so long sleeps do not lose the Airflow worker heartbeat.
 _MAX_RETRY_WAIT_SECONDS = 60
 
-# OpenFood blocks anonymous library defaults;
+# OFF rejects generic library User-Agent strings.
 _DEFAULT_USER_AGENT = (
     "NutriChainFoodLakehouse/1.0 "
     "(set OPENFOOD_USER_AGENT in .env to your email or project URL)"
@@ -97,12 +93,11 @@ def fetch_all_pages(
     *,
     page_start: int | None = None,
 ) -> dict:
-    """
-    Fetch up to OPENFOOD_MAX_PAGES API pages from Open Food Facts and save each as JSON.
+    """Download up to OPENFOOD_MAX_PAGES pages into ``output_dir``.
 
-    Pagination: by default reads ``next_page_start`` from pagination state and advances
-    it after the run so each batch pulls a new slice of the catalog (not pages 1..N
-    every time).
+    New batch: ``resolve_fetch_window`` sets ``batch_page_start..batch_page_end`` from
+    global ``next_page_start``. Retries reuse that window via ``.fetch_run_checkpoint.json``
+    and skip non-empty JSON already on disk.
 
     Args:
         output_dir : Local folder where JSON files will be written.
@@ -115,8 +110,8 @@ def fetch_all_pages(
               page_end, next_page_start.
 
     Raises:
-        OpenFoodConfigError : If required OPENFOOD_* env vars are missing or invalid.
-        RuntimeError : If max retries are exhausted on any page.
+        OpenFoodConfigError: Invalid/missing OPENFOOD_* env.
+        RuntimeError: Retries exhausted or timeout on a page.
     """
     settings = load_openfood_fetch_settings()
     max_pages = settings.max_pages
@@ -124,20 +119,54 @@ def fetch_all_pages(
     polite_delay_s = settings.polite_delay_seconds
     page_max_retries = settings.page_max_retries
 
-    if page_start is None:
-        page_start = load_next_page_start()
-    else:
-        page_start = max(1, int(page_start))
-
-    page_end = page_start + max_pages - 1
-
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    override = max(1, int(page_start)) if page_start is not None else None
+    batch_page_start, batch_page_end, first_api_page = resolve_fetch_window(
+        output_dir,
+        run_id,
+        max_pages,
+        page_start_override=override,
+    )
+    resumed = first_api_page > batch_page_start
 
     pages_fetched = 0
     records_total = 0
-    last_api_page = page_start - 1
+    last_api_page = batch_page_start - 1
 
-    for api_page in range(page_start, page_end + 1):
+    for api_page in range(first_api_page, batch_page_end + 1):
+        batch_slot = api_page - batch_page_start + 1
+        filename = f"run_{run_id}_page_{api_page:06d}.json"
+        filepath = Path(output_dir) / filename
+
+        if filepath.exists() and filepath.stat().st_size > 0:
+            try:
+                with open(filepath, encoding="utf-8") as f:
+                    cached = json.load(f)
+                cached_count = len(cached.get("products", []))
+            except (json.JSONDecodeError, OSError):
+                cached_count = 0
+
+            if cached_count > 0:
+                logger.info(
+                    "Skipping API page %d (batch slot %d/%d) — already saved at %s",
+                    api_page,
+                    batch_slot,
+                    max_pages,
+                    filename,
+                )
+                pages_fetched += 1
+                records_total += cached_count
+                last_api_page = api_page
+                save_next_page_start(api_page + 1)
+                save_run_checkpoint(
+                    output_dir,
+                    run_id=run_id,
+                    batch_page_start=batch_page_start,
+                    batch_page_end=batch_page_end,
+                    next_api_page=api_page + 1,
+                )
+                continue
         params = {
             "search_terms": "",
             "search_simple": 1,
@@ -158,7 +187,7 @@ def fetch_all_pages(
                 logger.info(
                     "Fetching API page %d (batch slot %d/%d), attempt %d/%d",
                     api_page,
-                    pages_fetched + 1,
+                    batch_slot,
                     max_pages,
                     attempt + 1,
                     max_retries,
@@ -171,11 +200,8 @@ def fetch_all_pages(
                 )
                 last_status = response.status_code
 
-                # ── KEY FIX: retry on ALL server-side errors, not just 429 ──
                 if response.status_code in RETRYABLE_STATUS_CODES:
-                    # Exponential backoff WITH jitter
-                    # Jitter = small random extra wait so multiple retries
-                    # don't all hit the server at exactly the same second
+                    # Back off with jitter so parallel retries do not align.
                     base_wait = min(2 ** attempt, _MAX_RETRY_WAIT_SECONDS)
                     jitter = random.uniform(0, 3)
                     wait_s = base_wait + jitter
@@ -186,25 +212,27 @@ def fetch_all_pages(
                         response.status_code, api_page, attempt + 1, max_retries, wait_s,
                     )
                     time.sleep(wait_s)
-                    continue  # go to next attempt, do NOT call raise_for_status
+                    continue
 
-                # For non-retryable errors (400, 401, 403, 404) → crash immediately
+                # 4xx (except rate limit) fail fast.
                 response.raise_for_status()
-                break  # success — exit the retry loop
+                break
 
-            except requests.exceptions.Timeout:
-                logger.error(
-                    "Timeout on API page %d, attempt %d/%d",
-                    api_page, attempt + 1, max_retries,
+            except _TRANSIENT_NETWORK_ERRORS as exc:
+                logger.warning(
+                    "Transient network error on API page %d (attempt %d/%d): %s",
+                    api_page,
+                    attempt + 1,
+                    max_retries,
+                    exc,
                 )
                 if attempt == max_retries - 1:
                     raise RuntimeError(
-                        f"API page {api_page} timed out after {max_retries} attempts."
-                    )
-                wait_s = min(2 ** attempt, _MAX_RETRY_WAIT_SECONDS) + random.uniform(0, 1)
+                        f"API page {api_page} failed after {max_retries} attempts: {exc}"
+                    ) from exc
+                wait_s = min(2 ** attempt, _MAX_RETRY_WAIT_SECONDS) + random.uniform(0, 3)
                 time.sleep(wait_s)
 
-        # ── After retry loop: check if we actually got a good response ────────
         if response is None:
             raise RuntimeError(f"No response received for API page {api_page}.")
 
@@ -238,9 +266,6 @@ def fetch_all_pages(
             "products": products,
         }
 
-        filename = f"run_{run_id}_page_{api_page:06d}.json"
-        filepath = Path(output_dir) / filename
-
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
 
@@ -253,22 +278,45 @@ def fetch_all_pages(
             api_page, filename, len(products), records_total,
         )
 
-        # Advance offset after each successful page so a killed task does not re-pull earlier pages.
         save_next_page_start(api_page + 1)
+        save_run_checkpoint(
+            output_dir,
+            run_id=run_id,
+            batch_page_start=batch_page_start,
+            batch_page_end=batch_page_end,
+            next_api_page=api_page + 1,
+        )
 
-        # Polite delay between pages — NEVER remove this for a free public API
+        # Required courtesy delay between pages on the public API.
         time.sleep(polite_delay_s)
+
+    batch_complete = last_api_page >= batch_page_end
 
     if pages_fetched == 0:
         next_page_start = 1
         logger.info(
             "No products fetched (exhausted at page %d). Resetting pagination to page 1.",
-            page_start,
+            first_api_page,
+        )
+    elif batch_complete:
+        next_page_start = batch_page_end + 1
+        save_next_page_start(next_page_start)
+        logger.info(
+            "Batch window %d..%d complete. Next scheduled run starts at API page %d.",
+            batch_page_start,
+            batch_page_end,
+            next_page_start,
         )
     else:
         next_page_start = last_api_page + 1
-
-    save_next_page_start(next_page_start)
+        logger.info(
+            "Batch window %d..%d incomplete (stopped at page %d). "
+            "Retry will resume at API page %d.",
+            batch_page_start,
+            batch_page_end,
+            last_api_page,
+            next_page_start,
+        )
 
     run_date = run_id[:8] if len(run_id) >= 8 and run_id[:8].isdigit() else run_id
 
@@ -278,9 +326,12 @@ def fetch_all_pages(
         "pages_fetched": pages_fetched,
         "records_total": records_total,
         "output_dir": output_dir,
-        "page_start": page_start,
+        "page_start": batch_page_start,
         "page_end": last_api_page if pages_fetched else None,
+        "batch_page_start": batch_page_start,
+        "batch_page_end": batch_page_end,
         "next_page_start": next_page_start,
+        "resumed": resumed,
     }
     logger.info("Fetch complete: %s", summary)
     return summary
