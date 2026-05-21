@@ -3,9 +3,34 @@
 End-to-end batch lakehouse on [Open Food Facts](https://world.openfoodfacts.org/): paginated API ingest, Delta Lake medallion layers on Databricks Unity Catalog, a dbt Gold star schema, and Power BI dashboards for pipeline health and monitoring. Orchestrated with Apache Airflow; delivered to Databricks through GitHub Actions and the Repos API.
 
 # Overview
-Portfolio project for **NutriChain Retail Intelligence**: turn crowd-sourced product JSON into typed tables, conformed dimensions, and nutrition facts that category managers can actually use in dashboards.
+Portfolio project for **NutriChain Retail Intelligence**: turn crowd-sourced product JSON into typed tables, conformed dimensions, and nutrition facts that category managers can actually use in dashboards. Open Food Facts exposes millions of product records as a paginated REST API. Analysts need stable tables, deduplicated keys, nutrition facts in typed columns, and a star schema — not raw JSON pages.
 
-Open Food Facts exposes millions of product records as a paginated REST API. Analysts need stable tables, deduplicated keys, nutrition facts in typed columns, and a star schema — not raw JSON pages.
+## Visual overview
+
+End-to-end flow: Open Food Facts API → Airflow orchestration → Databricks medallion layers → Power BI on Gold.
+
+**Architecture** — ingest, lakehouse layers, CI/CD, and consumption.
+
+![NutriChain lakehouse architecture](docs/architecture/architecture_nutrichain_lakehouse.jpg)
+
+**Orchestration** — DAG `nutrichain_openfood_daily` (every 4h UTC): fetch → Volume → Bronze → Silver → dbt run/test.
+
+![Airflow DAG graph view](powerbi/nutrichain-airflow-dag-graph.png)
+
+**STAR Schema** — Gold layer dimensions and fact tables
+
+![STAR Schema](powerbi/nutrichain-gold-star-schema-dbt.png)
+
+**Power BI** — pipeline health, product mix, sanity checks, and column completeness (Gold + `pipeline_audit`).
+
+| Pipeline health | Product mix |
+| :---: | :---: |
+| ![Pipeline health dashboard](powerbi/nutrichain-pipeline-health-dashbaord.png) | ![Product mix dashboard](powerbi/nutrichain-product-mix-dashboard.png) |
+
+| Sanity checks | Column completeness |
+| :---: | :---: |
+| ![Sanity check dashboard](powerbi/nutrichain-sanity-check-dashboard.png) | ![Column completeness dashboard](powerbi/nutrichain-colum-completeness-dashboard.png) |
+
 
 NutriChain closes that gap:
 
@@ -28,6 +53,7 @@ Bounded pagination (`OPENFOOD_MAX_PAGES`) and a persisted page offset (`OPENFOOD
 | Consumption | Power BI report wired to Gold (including audit metrics) |
 
 **Stack:** Python 3.12 · Apache Airflow 2.9 · PySpark (Databricks) · Delta Lake · Unity Catalog · dbt 1.8 · GitHub Actions · Power BI
+
 
 ---
 
@@ -61,7 +87,7 @@ Open Food Facts API (paginated JSON)
 
 **Delivery:** On push to `main`, GitHub Actions runs `pytest`, then `PATCH /api/2.0/repos/{DATABRICKS_REPO_ID}` so the Git-backed Databricks Repo matches `main`. Job notebooks must live under `/Repos/...`, not legacy `/Shared` imports.
 
-Architecture diagrams: [docs/architecture/
+Architecture diagrams: [docs/architecture/](docs/architecture/) (Draw.io source + exported JPG). Airflow screenshot: [docs/screenshots/nutrichain_airflow_dag_graph.png](docs/screenshots/nutrichain_airflow_dag_graph.png). Dashboard PNGs: [powerbi/](powerbi/).
 
 ---
 
@@ -93,7 +119,8 @@ nutrichain-food-lakehouse/
 ├── scripts/
 │   └── generate_country_alias_lookup.py
 ├── powerbi/
-│   └── pipeline-health-dashboard.pbix
+│   ├── pipeline-health-dashboard.pbix
+│   └── *.png                         # Dashboard exports for README / portfolio
 ├── docs/
 │   ├── architecture/
 │   └── plan/openfood-nutrichain-project-plan.md
