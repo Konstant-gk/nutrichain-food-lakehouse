@@ -2,10 +2,10 @@
 
 **Stack:** Git · GitHub Actions · Apache Airflow (Docker) · Python · Open Food Facts API · Databricks (Unity Catalog, Delta Lake, PySpark) · dbt · Power BI  
 **Pattern:** Medallion (Bronze → Silver → Gold) on Delta Lake  
-**Consumption:** Power BI (Databricks SQL connector) on Gold Delta — four report pages for ops health, completeness, product mix, and sanity checks  
+**Consumption:** Power BI (Databricks SQL connector) on Gold Delta — five report pages for ops health, completeness, product mix, sanity checks and run history  
 **Orchestration:** Airflow DAG `nutrichain_openfood_daily` (every 3 hours UTC) → Databricks Jobs → dbt in Airflow container → refresh Gold in Power BI
 
-**Timeline:** 1.5 months
+**Timeline:** 2 months  
 **Industry:** Food retail / nutrition intelligence  
 **Core stack:** Python, PySpark, SQL (dbt), Delta Lake, Airflow, Databricks
 
@@ -65,7 +65,7 @@ Build a **centralized, automated data lakehouse** that:
 5. Publishes **Power BI dashboards** on top of Gold so ops and analysts see run health and data quality without writing SQL
 6. Deploys Databricks job code via **Git-backed Repos sync** on merge to `main` — no manual workspace uploads
 
-**Definition of done:** A full DAG run succeeds end-to-end; Gold tests pass; `pagination_state.json` advances; Gold tables refresh in Power BI; the four report pages show current `ingest_run_id` slices and sane nutrition distributions.
+**Definition of done:** A full DAG run succeeds end-to-end; Gold tests pass; `pagination_state.json` advances; Gold tables refresh in Power BI; the five report pages show current `ingest_run_id` slices and sane nutrition distributions.
 
 ---
 
@@ -119,7 +119,7 @@ Open Food Facts API (paginated JSON)
 ┌───────────────────────────────────────┐
 │  Power BI (Databricks SQL connector)   │
 │  Import / refresh Gold + relationships │
-│  4 report pages (health, QA, mix, QC)  │
+│  5 report pages (health, QA, mix, QC)  │
 └───────────────────────────────────────┘
 ```
 
@@ -161,7 +161,7 @@ pipeline_audit  (per ingest_run_id — ops / Power BI health dashboard)
 
 ## How it works
 
-### Step 0 — Configuration and operational parameters
+### Step 1 — Configuration and operational parameters
 
 All runtime tuning lives in **environment variables** (see `env.example.txt`); Python loaders fail fast if required keys are missing.
 
@@ -182,7 +182,7 @@ All runtime tuning lives in **environment variables** (see `env.example.txt`); P
 
 ---
 
-### Step 1 — Extract and land (Airflow Tasks 1–2)
+### Step 2 — Extract and land (Airflow Tasks 1–2)
 
 **Task `fetch_openfood_pages`** (`src/openfood/fetch.py`)
 
@@ -201,7 +201,7 @@ All runtime tuning lives in **environment variables** (see `env.example.txt`); P
 
 ---
 
-### Step 2 — Bronze layer: source ingestion
+### Step 3 — Bronze layer: source ingestion
 
 **Task `trigger_bronze_job`** → `databricks/bronze/bronze_ingestion.py`
 
@@ -221,7 +221,7 @@ Bronze is the **audit layer**. Page-level JSON is read from the Volume; **no cle
 
 ---
 
-### Step 3 — Silver layer: data cleansing and validation
+### Step 4 — Silver layer: data cleansing and validation
 
 **Task `trigger_silver_job`** → `databricks/silver/silver_transform.py`
 
@@ -245,7 +245,7 @@ Silver is where data becomes **trustworthy for joins**. PySpark reads Bronze for
 | 11  | `primary_category` / `primary_brand` / `primary_country` | First token from comma lists                                   | Conformed join keys for Gold       |
 | 12  | `nutriscore_grade_recalculated`                          | Score bands → grade a–e                                        | Detect mislabeled products         |
 | 13  | `nutriscore_grade_mismatch`                              | Reported ≠ recalculated                                        | Regulatory / QA flag               |
-| 14  | `row_hash`                                               | SHA-256(barcode | last_modified_unix)                          | Dedup support                      |
+| 14  | `row_hash`                                               | SHA-256(barcode                                                | last_modified_unix)                |
 | 15  | `barcode_is_ean`                                         | Regex `^[0-9]{8,14}$`                                          | Monitoring (non-EAN kept)          |
 | 16  | Dedup                                                    | `ROW_NUMBER` by barcode, keep latest `last_modified_unix`      | One current row per product        |
 | 17  | Filter                                                   | Drop null barcode                                              | Enforce primary key                |
@@ -255,7 +255,7 @@ Silver is where data becomes **trustworthy for joins**. PySpark reads Bronze for
 
 ---
 
-### Step 4 — Gold layer: business-ready star schema (dbt)
+### Step 5 — Gold layer: business-ready star schema (dbt)
 
 **Tasks `run_dbt_gold_models` and `test_dbt_gold_models`**
 
@@ -282,7 +282,7 @@ Gold is owned **only by dbt** (no PySpark Gold job). `dbt seed` loads `nutriscor
 
 ---
 
-### Step 5 — Serve: Power BI on Gold (import from Databricks)
+### Step 6 — Serve: Power BI on Gold (import from Databricks)
 
 After Gold tables are built and `dbt test` passes, consumption happens in **Power BI Desktop** (reports under `powerbi/`). Data is loaded through the **Databricks SQL** connector (or equivalent warehouse endpoint) against catalog `nutrichain_lakehouse`, schemas `gold` (and `silver` only if a page needs raw completeness before Gold snapshot).
 
@@ -300,7 +300,7 @@ The lakehouse is not “done” when Delta tables exist — stakeholders need a 
 | **Refresh**       | Manual or scheduled refresh after a successful DAG run (Gold append/MERGE + dbt run)                               |
 
 
-#### Report pages (four dashboards)
+#### Report pages (five dashboards)
 
 
 | Page                    | Primary tables                               | What it monitors                                                                                                                                                                                                                                                                                                                                     |
@@ -315,7 +315,7 @@ The lakehouse is not “done” when Delta tables exist — stakeholders need a 
 
 ---
 
-### Step 6 — Data quality implementation
+### Step 7 — Data quality implementation
 
 Quality is a **gate**, not an afterthought.
 
@@ -341,7 +341,7 @@ Quality is a **gate**, not an afterthought.
 
 ---
 
-### Step 7 — CI/CD and deployment
+### Step 8 — CI/CD and deployment
 
 **Workflow:** `.github/workflows/ci_cd.yml`
 
@@ -378,7 +378,7 @@ Databricks Bronze/Silver jobs must point at **Repos** paths (e.g. `/Repos/<user>
 | Area               | Specification                                                                           |
 | ------------------ | --------------------------------------------------------------------------------------- |
 | **Source**         | Open Food Facts public REST API; no API key                                             |
-| **Ingest cadence** | Every 4 hours UTC (`0 */4 * * `*)                                                       |
+| **Ingest cadence** | Every 4 hours UTC (`0 */4 * `* *)                                                       |
 | **Batch identity** | `run_date` = `YYYYMMDD`, `run_id` / `ingest_run_id` = `YYYYMMDD_HH00`                   |
 | **Catalog**        | `nutrichain_lakehouse` (default); schemas `bronze`, `silver`, `gold`                    |
 | **Bronze table**   | `bronze.bronze_openfood_products_raw`                                                   |
@@ -386,7 +386,7 @@ Databricks Bronze/Silver jobs must point at **Repos** paths (e.g. `/Repos/<user>
 | **Gold tables**    | dbt-managed dims, `fact_product_nutrition`, `pipeline_audit`                            |
 | **Orchestration**  | Airflow 2.9, Postgres metadata, Docker Compose locally                                  |
 | **Transform**      | PySpark 3.x on Databricks (Silver); dbt-databricks 1.8 (Gold)                           |
-| **BI**             | Power BI Desktop; Databricks SQL → Gold fact/dims + `pipeline_audit`; four report pages |
+| **BI**             | Power BI Desktop; Databricks SQL → Gold fact/dims + `pipeline_audit`; five report pages |
 | **Secrets**        | `.env` and `dbt/profiles.yml` gitignored; GitHub Actions secrets for Databricks         |
 
 
