@@ -1,4 +1,4 @@
-# NutriChain Food Lakehouse
+# NutriChain Open Food Lakehouse
 
 End-to-end batch lakehouse on [Open Food Facts](https://world.openfoodfacts.org/): paginated API ingest, Delta Lake medallion layers on Databricks Unity Catalog, a dbt Gold star schema, and Power BI dashboards for pipeline health and monitoring. Orchestrated with Apache Airflow; delivered to Databricks through GitHub Actions and the Repos API.
 
