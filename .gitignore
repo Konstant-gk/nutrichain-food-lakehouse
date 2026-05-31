@@ -47,3 +47,4 @@ env/
 
 # Accidental nested checkout (duplicate repo folder under project root)
 /nutrichain-food-lakehouse/
+/.venv-dbt
